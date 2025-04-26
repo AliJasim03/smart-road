@@ -54,7 +54,16 @@ fn main() -> Result<(), String> {
 
     while running {
         // Calculate frame time
-        frame_time = last_frame.elapsed().as_millis() as u32;
+        let now = Instant::now();
+        frame_time = now.duration_since(last_frame).as_millis() as u32;
+        last_frame = now;
+
+        // Make sure frame_time is never zero or too small
+        if frame_time < 10 {
+            frame_time = 10; // Ensure a more reasonable minimum time delta
+        }
+
+        println!("Frame time: {}ms", frame_time);
 
         // Handle events
         for event in event_pump.poll_iter() {
@@ -64,6 +73,17 @@ fn main() -> Result<(), String> {
                 }
                 Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
                     running = false;
+                }
+                Event::KeyDown { keycode: Some(Keycode::R), .. } => {
+                    println!("R key pressed - toggling continuous spawn");
+                    game.handle_event(&event);
+                }
+                Event::KeyDown { keycode: Some(Keycode::Up), .. } |
+                Event::KeyDown { keycode: Some(Keycode::Down), .. } |
+                Event::KeyDown { keycode: Some(Keycode::Left), .. } |
+                Event::KeyDown { keycode: Some(Keycode::Right), .. } => {
+                    println!("Arrow key pressed - spawning vehicle");
+                    game.handle_event(&event);
                 }
                 _ => {
                     game.handle_event(&event);

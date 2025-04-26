@@ -39,6 +39,7 @@ pub enum VelocityLevel {
 pub struct Vehicle {
     pub id: u32,
     pub position: Point, // Current position
+    position_f: (f64, f64), // For calculation - more precise
     pub direction: Direction,
     pub route: Route,
     pub state: VehicleState,
@@ -60,32 +61,35 @@ impl Vehicle {
     pub const SAFE_DISTANCE: f64 = 50.0; // pixels
 
     // Vehicle dimensions
-    pub const WIDTH: u32 = 30;
-    pub const HEIGHT: u32 = 60;
+    pub const WIDTH: u32 = 40;
+    pub const HEIGHT: u32 = 80;
 
     pub fn new(direction: Direction, route: Route) -> Self {
         // Get a unique ID using the atomic counter
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
 
         // Set initial position based on direction
-        let position = match direction {
-            Direction::North => Point::new(
-                intersection_center().0 - (LANE_WIDTH as i32 / 2),
-                0,
-            ),
-            Direction::South => Point::new(
-                intersection_center().0 + (LANE_WIDTH as i32 / 2),
-                crate::WINDOW_HEIGHT as i32,
-            ),
-            Direction::East => Point::new(
-                crate::WINDOW_WIDTH as i32,
-                intersection_center().1 - (LANE_WIDTH as i32 / 2),
-            ),
-            Direction::West => Point::new(
-                0,
-                intersection_center().1 + (LANE_WIDTH as i32 / 2),
-            ),
+        let (pos_x, pos_y) = match direction {
+            Direction::North => {
+                let x = intersection_center().0 - (LANE_WIDTH as i32 / 2);
+                (x as f64, 0.0)
+            },
+            Direction::South => {
+                let x = intersection_center().0 + (LANE_WIDTH as i32 / 2);
+                (x as f64, crate::WINDOW_HEIGHT as f64)
+            },
+            Direction::East => {
+                let y = intersection_center().1 - (LANE_WIDTH as i32 / 2);
+                (crate::WINDOW_WIDTH as f64, y as f64)
+            },
+            Direction::West => {
+                let y = intersection_center().1 + (LANE_WIDTH as i32 / 2);
+                (0.0, y as f64)
+            },
         };
+
+        // Create the Point for rendering
+        let position = Point::new(pos_x as i32, pos_y as i32);
 
         // Set initial angle based on direction
         let angle = match direction {
@@ -113,6 +117,7 @@ impl Vehicle {
         Vehicle {
             id,
             position,
+            position_f: (pos_x, pos_y),
             direction,
             route,
             state: VehicleState::Approaching,
@@ -131,6 +136,11 @@ impl Vehicle {
     // Update the vehicle's position and state
     pub fn update(&mut self, delta_time: u32, intersection: &Intersection) {
         let dt = delta_time as f64 / 1000.0; // Convert to seconds
+
+        // Debug print
+        println!("Vehicle {} update: dt={}, velocity={}, position=({},{}), position_f=({},{})",
+                 self.id, dt, self.current_velocity, self.position.x, self.position.y,
+                 self.position_f.0, self.position_f.1);
 
         // Adjust velocity towards target_velocity
         if (self.current_velocity - self.target_velocity).abs() > 1.0 {
@@ -151,18 +161,21 @@ impl Vehicle {
         let distance = self.current_velocity * dt;
         match self.direction {
             Direction::North => {
-                self.position = Point::new(self.position.x, self.position.y - distance as i32);
+                self.position_f.1 -= distance;
             }
             Direction::South => {
-                self.position = Point::new(self.position.x, self.position.y + distance as i32);
+                self.position_f.1 += distance;
             }
             Direction::East => {
-                self.position = Point::new(self.position.x - distance as i32, self.position.y);
+                self.position_f.0 -= distance;
             }
             Direction::West => {
-                self.position = Point::new(self.position.x + distance as i32, self.position.y);
+                self.position_f.0 += distance;
             }
         }
+
+        // Update integer position for rendering
+        self.position = Point::new(self.position_f.0.round() as i32, self.position_f.1.round() as i32);
 
         // Update state based on position relative to intersection
         self.update_state(intersection);

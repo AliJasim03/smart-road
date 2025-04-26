@@ -18,13 +18,13 @@
     <!-- Intersection -->
     <rect x="150" y="150" width="100" height="100" fill="#444444"/>
 
-    <!-- Road center lines (horizontal) -->
-    <line x1="0" y1="200" x2="150" y2="200" stroke="#ffff00" stroke-width="4" stroke-dasharray="20,20"/>
-    <line x1="250" y1="200" x2="400" y2="200" stroke="#ffff00" stroke-width="4" stroke-dasharray="20,20"/>
+    <!-- Lane dividers (horizontal) -->
+    <line x1="0" y1="200" x2="150" y2="200" stroke="#ffffff" stroke-width="4" stroke-dasharray="20,20"/>
+    <line x1="250" y1="200" x2="400" y2="200" stroke="#ffffff" stroke-width="4" stroke-dasharray="20,20"/>
 
-    <!-- Road center lines (vertical) -->
-    <line x1="200" y1="0" x2="200" y2="150" stroke="#ffff00" stroke-width="4" stroke-dasharray="20,20"/>
-    <line x1="200" y1="250" x2="200" y2="400" stroke="#ffff00" stroke-width="4" stroke-dasharray="20,20"/>
+    <!-- Lane dividers (vertical) -->
+    <line x1="200" y1="0" x2="200" y2="150" stroke="#ffffff" stroke-width="4" stroke-dasharray="20,20"/>
+    <line x1="200" y1="250" x2="200" y2="400" stroke="#ffffff" stroke-width="4" stroke-dasharray="20,20"/>
 
     <!-- Road edges -->
     <line x1="0" y1="150" x2="400" y2="150" stroke="#ffffff" stroke-width="2"/>
@@ -32,9 +32,20 @@
     <line x1="150" y1="0" x2="150" y2="400" stroke="#ffffff" stroke-width="2"/>
     <line x1="250" y1="0" x2="250" y2="400" stroke="#ffffff" stroke-width="2"/>
 
-    <!-- Stopping lines -->
-    <line x1="155" y1="150" x2="155" y2="250" stroke="#ffffff" stroke-width="5"/>
-    <line x1="245" y1="150" x2="245" y2="250" stroke="#ffffff" stroke-width="5"/>
-    <line x1="150" y1="155" x2="250" y2="155" stroke="#ffffff" stroke-width="5"/>
-    <line x1="150" y1="245" x2="250" y2="245" stroke="#ffffff" stroke-width="5"/>
+    <!-- Lane markings for directions -->
+    <!-- North (bottom to top) -->
+    <text x="180" y="380" font-family="Arial" font-size="14" fill="#ffffff">N</text>
+    <path d="M200,350 L200,330 M195,335 L200,330 L205,335" stroke="#ffffff" stroke-width="2" fill="none"/>
+
+    <!-- South (top to bottom) -->
+    <text x="180" y="30" font-family="Arial" font-size="14" fill="#ffffff">S</text>
+    <path d="M200,30 L200,50 M195,45 L200,50 L205,45" stroke="#ffffff" stroke-width="2" fill="none"/>
+
+    <!-- East (right to left) -->
+    <text x="30" y="190" font-family="Arial" font-size="14" fill="#ffffff">E</text>
+    <path d="M50,200 L70,200 M65,195 L70,200 L65,205" stroke="#ffffff" stroke-width="2" fill="none"/>
+
+    <!-- West (left to right) -->
+    <text x="370" y="190" font-family="Arial" font-size="14" fill="#ffffff">W</text>
+    <path d="M350,200 L330,200 M335,195 L330,200 L335,205" stroke="#ffffff" stroke-width="2" fill="none"/>
 </svg>
