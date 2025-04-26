@@ -1,0 +1,11 @@
+[package]
+name = "smart_road"
+version = "0.1.0"
+edition = "2024"
+links = "SDL2 SDL2_image SDL2_ttf"
+
+[dependencies]
+sdl2 = { version = "0.35.2", features = ["image", "ttf"] }
+rand = "0.8.5"
+
+[build-dependencies]

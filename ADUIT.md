@@ -30,27 +30,33 @@
 
 ###### Did all vehicles pass the intersection without any collision?
 
-##### Try to generate four vehicles at the same time, one using the `"Right"` key and the others using the `"Left"` key (repeat this operation until there is a collision route).
+##### Try to generate four vehicles at the same time, one using the `"Right"` key and the others using the
+`"Left"` key (repeat this operation until there is a collision route).
 
 ###### Did all vehicles pass the intersection without any collision?
 
-##### Try to generate four vehicles at the same time, one using the `"Up"` key and the other using the `"Left"` key (repeat this operation until there is a collision route).
+##### Try to generate four vehicles at the same time, one using the `"Up"` key and the other using the
+`"Left"` key (repeat this operation until there is a collision route).
 
 ###### Did all vehicles pass the intersection without any collision?
 
-##### Try to generate four vehicles at the same time, one using the `"Up"` key and the other using the `"Right"` key (repeat this operation until there is a collision route).
+##### Try to generate four vehicles at the same time, one using the `"Up"` key and the other using the
+`"Right"` key (repeat this operation until there is a collision route).
 
 ###### Did all vehicles pass the intersection without any collision?
 
-##### Try to generate four vehicles at the same time, one using the `"Down"` key and the other using the `"Left"` key (repeat this operation until there is a collision route).
+##### Try to generate four vehicles at the same time, one using the `"Down"` key and the other using the
+`"Left"` key (repeat this operation until there is a collision route).
 
 ###### Did all vehicles pass the intersection without any collision?
 
-##### Try to generate four vehicles at the same time, one using the `"Down"` key and the other using the `"Right"` key (repeat this operation until there is a collision route).
+##### Try to generate four vehicles at the same time, one using the `"Down"` key and the other using the
+`"Right"` key (repeat this operation until there is a collision route).
 
 ###### Did all vehicles pass the intersection without any collision?
 
-##### Try to generate five vehicles using the `"Up"` key, at the same time generate two vehicles using the key `"Right"`.
+##### Try to generate five vehicles using the `"Up"` key, at the same time generate two vehicles using the key
+`"Right"`.
 
 ###### Did all vehicles pass the intersection without any collision?
 
@@ -64,7 +70,9 @@
 
 ###### Did the traffic congestion remain low while running the application? (ex: high traffic congestion can be 8 or more vehicles stuck in the same lane)?
 
-##### Try to generate four vehicles using the `"UP"` key to generate two and the `"Right"` key to generate the other two. Then when the vehicles finish passing the intersection, exit the application by using the `"Esc"` key.
+##### Try to generate four vehicles using the `"UP"` key to generate two and the
+`"Right"` key to generate the other two. Then when the vehicles finish passing the intersection, exit the application by using the
+`"Esc"` key.
 
 ###### Did all vehicles pass the intersection without any collision?
 
