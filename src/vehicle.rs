@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 // Global atomic counter for vehicle IDs
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     North, // Moving from south to north
     South, // Moving from north to south
@@ -36,6 +36,24 @@ pub enum VelocityLevel {
     Fast,
 }
 
+// New struct for Bezier curve-based turning
+struct TurningPath {
+    start_point: (f64, f64),
+    control_point: (f64, f64),
+    end_point: (f64, f64),
+    progress: f64,  // 0.0 to 1.0
+}
+
+// New struct for physics-based movement
+pub struct VehiclePhysics {
+    max_acceleration: f64,      // Maximum acceleration rate (pixels/second²)
+    max_deceleration: f64,      // Maximum deceleration/braking rate (pixels/second²)
+    current_acceleration: f64,  // Current acceleration
+    mass: f64,                  // Vehicle mass affects acceleration
+    drag_coefficient: f64,      // Air resistance factor
+    engine_power: f64,          // Power factor - affects acceleration curve
+}
+
 pub struct Vehicle {
     pub id: u32,
     pub position: Point, // Current position
@@ -52,6 +70,8 @@ pub struct Vehicle {
     pub time_in_intersection: u32, // Time spent within the intersection in milliseconds
     pub start_time: std::time::Instant, // When the vehicle was created
     pub entry_time: Option<std::time::Instant>, // When the vehicle entered the intersection
+    turning_path: Option<TurningPath>, // Bezier curve path for turning
+    physics: VehiclePhysics, // Physics properties for realistic movement
 }
 
 impl Vehicle {
@@ -114,6 +134,16 @@ impl Vehicle {
             VelocityLevel::Fast => Self::FAST_VELOCITY,
         };
 
+        // Initialize physics properties with slight randomization for variety
+        let physics = VehiclePhysics {
+            max_acceleration: rng.gen_range(25.0..35.0),  // pixels/second²
+            max_deceleration: rng.gen_range(50.0..70.0),  // braking is stronger than acceleration
+            current_acceleration: 0.0,
+            mass: rng.gen_range(800.0..2000.0),  // kg (affects acceleration)
+            drag_coefficient: rng.gen_range(0.25..0.35), // Air resistance factor
+            engine_power: rng.gen_range(90.0..110.0),    // Power factor (percentage of efficiency)
+        };
+
         Vehicle {
             id,
             position,
@@ -130,6 +160,8 @@ impl Vehicle {
             time_in_intersection: 0,
             start_time: std::time::Instant::now(),
             entry_time: None,
+            turning_path: None,
+            physics,
         }
     }
 
@@ -142,40 +174,37 @@ impl Vehicle {
                  self.id, dt, self.current_velocity, self.position.x, self.position.y,
                  self.position_f.0, self.position_f.1);
 
-        // Adjust velocity towards target_velocity
-        if (self.current_velocity - self.target_velocity).abs() > 1.0 {
-            let direction = if self.current_velocity < self.target_velocity { 1.0 } else { -1.0 };
-            self.current_velocity += direction * 50.0 * dt; // Acceleration/deceleration rate
+        // Calculate appropriate acceleration based on target velocity
+        self.calculate_acceleration();
 
-            // Ensure we don't overshoot
-            if direction > 0.0 && self.current_velocity > self.target_velocity {
-                self.current_velocity = self.target_velocity;
-            } else if direction < 0.0 && self.current_velocity < self.target_velocity {
-                self.current_velocity = self.target_velocity;
-            }
+        // Apply acceleration to velocity (with physics simulation)
+        self.apply_physics(dt);
+
+        // Check if vehicle is turning via bezier curve
+        if self.state == VehicleState::Turning && self.turning_path.is_some() {
+            // Update position along bezier curve
+            self.update_position_along_curve(dt);
         } else {
-            self.current_velocity = self.target_velocity;
-        }
+            // Move vehicle based on current direction and velocity
+            let distance = self.current_velocity * dt;
+            match self.direction {
+                Direction::North => {
+                    self.position_f.1 -= distance;
+                }
+                Direction::South => {
+                    self.position_f.1 += distance;
+                }
+                Direction::East => {
+                    self.position_f.0 -= distance;
+                }
+                Direction::West => {
+                    self.position_f.0 += distance;
+                }
+            }
 
-        // Move vehicle based on current direction and velocity
-        let distance = self.current_velocity * dt;
-        match self.direction {
-            Direction::North => {
-                self.position_f.1 -= distance;
-            }
-            Direction::South => {
-                self.position_f.1 += distance;
-            }
-            Direction::East => {
-                self.position_f.0 -= distance;
-            }
-            Direction::West => {
-                self.position_f.0 += distance;
-            }
+            // Update integer position for rendering
+            self.position = Point::new(self.position_f.0.round() as i32, self.position_f.1.round() as i32);
         }
-
-        // Update integer position for rendering
-        self.position = Point::new(self.position_f.0.round() as i32, self.position_f.1.round() as i32);
 
         // Update state based on position relative to intersection
         self.update_state(intersection);
@@ -187,6 +216,99 @@ impl Vehicle {
             // Record entry time if we just entered
             if self.state == VehicleState::Entering && self.entry_time.is_none() {
                 self.entry_time = Some(std::time::Instant::now());
+            }
+        }
+    }
+
+    // Calculate appropriate acceleration based on target velocity and current conditions
+    fn calculate_acceleration(&mut self) {
+        let velocity_diff = self.target_velocity - self.current_velocity;
+
+        if velocity_diff.abs() < 1.0 {
+            // Close enough to target, stabilize
+            self.physics.current_acceleration = 0.0;
+            self.current_velocity = self.target_velocity;
+        } else if velocity_diff > 0.0 {
+            // Need to accelerate
+            // Apply gradual acceleration with diminishing returns as we approach max speed
+            let acceleration_factor = 1.0 - (self.current_velocity / Vehicle::FAST_VELOCITY).min(0.9);
+
+            // Engine power affects acceleration capability (percentage efficiency)
+            let power_factor = self.physics.engine_power / 100.0;
+
+            self.physics.current_acceleration = self.physics.max_acceleration * acceleration_factor * power_factor;
+        } else {
+            // Need to decelerate
+            // Braking force increases as speed increases (air resistance + mechanical braking)
+            let braking_factor = 0.5 + (self.current_velocity / Vehicle::FAST_VELOCITY).min(0.5);
+            self.physics.current_acceleration = -self.physics.max_deceleration * braking_factor;
+        }
+    }
+
+    // Apply physics calculations to update velocity
+    fn apply_physics(&mut self, dt: f64) {
+        // Calculate air resistance (drag increases with square of velocity)
+        let air_resistance = self.physics.drag_coefficient * self.current_velocity * self.current_velocity * 0.01;
+
+        // Apply air resistance as a negative acceleration
+        let drag_deceleration = if self.current_velocity > 0.0 { -air_resistance } else { 0.0 };
+
+        // Calculate net acceleration (including air resistance)
+        let net_acceleration = self.physics.current_acceleration + drag_deceleration;
+
+        // Apply mass factor (F = ma, so a = F/m)
+        let mass_factor = 1000.0 / self.physics.mass; // Normalize to a reasonable range
+        let effective_acceleration = net_acceleration * mass_factor;
+
+        // Apply acceleration to velocity
+        self.current_velocity += effective_acceleration * dt;
+
+        // Ensure velocity stays within bounds
+        self.current_velocity = self.current_velocity.max(0.0).min(Vehicle::FAST_VELOCITY);
+
+        // Debug physics info
+        println!("Vehicle {} physics: target={}, current={}, accel={}, drag={}, mass={}",
+                 self.id, self.target_velocity, self.current_velocity,
+                 self.physics.current_acceleration, drag_deceleration, self.physics.mass);
+    }
+
+    // Use quadratic Bezier curve for smooth turning
+    fn update_position_along_curve(&mut self, dt: f64) {
+        if let Some(path) = &mut self.turning_path {
+            // Increment progress based on velocity and time
+            path.progress += (self.current_velocity / 300.0) * dt;
+            path.progress = path.progress.min(1.0);
+
+            // Calculate position using Bezier formula
+            let t = path.progress;
+            let x = (1.0-t)*(1.0-t)*path.start_point.0 +
+                2.0*(1.0-t)*t*path.control_point.0 +
+                t*t*path.end_point.0;
+
+            let y = (1.0-t)*(1.0-t)*path.start_point.1 +
+                2.0*(1.0-t)*t*path.control_point.1 +
+                t*t*path.end_point.1;
+
+            // Update position
+            self.position_f = (x, y);
+            self.position = Point::new(x as i32, y as i32);
+
+            // Calculate tangent angle for realistic orientation
+            let dx = 2.0*(1.0-t)*(path.control_point.0 - path.start_point.0) +
+                2.0*t*(path.end_point.0 - path.control_point.0);
+
+            let dy = 2.0*(1.0-t)*(path.control_point.1 - path.start_point.1) +
+                2.0*t*(path.end_point.1 - path.control_point.1);
+
+            // Set angle based on tangent direction (if defined)
+            if dx != 0.0 || dy != 0.0 {
+                self.angle = (dy.atan2(dx) * 180.0 / std::f64::consts::PI + 90.0) % 360.0;
+            }
+
+            // Check if we've completed the turn
+            if path.progress >= 1.0 {
+                self.state = VehicleState::Exiting;
+                self.complete_turning();
             }
         }
     }
@@ -204,17 +326,22 @@ impl Vehicle {
                     self.state = VehicleState::Turning;
                     // Start turning if not going straight
                     if self.route != Route::Straight {
-                        self.start_turning();
+                        self.initialize_turning_path();
                     }
                 }
             }
             VehicleState::Turning => {
-                if self.has_completed_turn() {
-                    self.state = VehicleState::Exiting;
-                    self.complete_turning();
-                } else {
-                    self.continue_turning();
+                // If going straight or no turning path, check if we've completed the turn
+                if self.route == Route::Straight || self.turning_path.is_none() {
+                    if self.has_completed_turn() {
+                        self.state = VehicleState::Exiting;
+                        self.complete_turning();
+                    } else {
+                        // Legacy turning logic (should be unused with Bezier curves active)
+                        self.continue_turning();
+                    }
                 }
+                // If using Bezier curves, update_position_along_curve handles state transition
             }
             VehicleState::Exiting => {
                 if self.has_left_intersection(intersection) {
@@ -222,6 +349,90 @@ impl Vehicle {
                 }
             }
             VehicleState::Completed => {}
+        }
+    }
+
+    // Initialize the Bezier curve turning path based on direction and route
+    fn initialize_turning_path(&mut self) {
+        let center = intersection_center();
+        let center_x = center.0 as f64;
+        let center_y = center.1 as f64;
+        let lane_offset = LANE_WIDTH as f64 / 2.0;
+
+        // Create turning path based on direction and route
+        match (self.direction, self.route) {
+            // Left turns (90° counterclockwise)
+            (Direction::North, Route::Left) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x - lane_offset, center_y - lane_offset),
+                    control_point: (center_x - lane_offset * 2.0, center_y - lane_offset * 2.0),
+                    end_point: (center_x - lane_offset * 3.0, center_y),
+                    progress: 0.0,
+                });
+            }
+            (Direction::South, Route::Left) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x + lane_offset, center_y + lane_offset),
+                    control_point: (center_x + lane_offset * 2.0, center_y + lane_offset * 2.0),
+                    end_point: (center_x + lane_offset * 3.0, center_y),
+                    progress: 0.0,
+                });
+            }
+            (Direction::East, Route::Left) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x + lane_offset, center_y - lane_offset),
+                    control_point: (center_x + lane_offset * 2.0, center_y - lane_offset * 2.0),
+                    end_point: (center_x, center_y - lane_offset * 3.0),
+                    progress: 0.0,
+                });
+            }
+            (Direction::West, Route::Left) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x - lane_offset, center_y + lane_offset),
+                    control_point: (center_x - lane_offset * 2.0, center_y + lane_offset * 2.0),
+                    end_point: (center_x, center_y + lane_offset * 3.0),
+                    progress: 0.0,
+                });
+            }
+
+            // Right turns (90° clockwise)
+            (Direction::North, Route::Right) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x - lane_offset, center_y - lane_offset),
+                    control_point: (center_x - lane_offset * 0.5, center_y - lane_offset * 2.0),
+                    end_point: (center_x, center_y - lane_offset * 3.0),
+                    progress: 0.0,
+                });
+            }
+            (Direction::South, Route::Right) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x + lane_offset, center_y + lane_offset),
+                    control_point: (center_x + lane_offset * 0.5, center_y + lane_offset * 2.0),
+                    end_point: (center_x, center_y + lane_offset * 3.0),
+                    progress: 0.0,
+                });
+            }
+            (Direction::East, Route::Right) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x + lane_offset, center_y - lane_offset),
+                    control_point: (center_x + lane_offset * 2.0, center_y - lane_offset * 0.5),
+                    end_point: (center_x + lane_offset * 3.0, center_y),
+                    progress: 0.0,
+                });
+            }
+            (Direction::West, Route::Right) => {
+                self.turning_path = Some(TurningPath {
+                    start_point: (center_x - lane_offset, center_y + lane_offset),
+                    control_point: (center_x - lane_offset * 2.0, center_y + lane_offset * 0.5),
+                    end_point: (center_x - lane_offset * 3.0, center_y),
+                    progress: 0.0,
+                });
+            }
+
+            // Straight paths (no curve needed)
+            (_, Route::Straight) => {
+                self.turning_path = None;
+            }
         }
     }
 
@@ -276,15 +487,16 @@ impl Vehicle {
         distance_squared < (LANE_WIDTH as i32 * 2).pow(2)
     }
 
-    // Initialize turning
+    // Initialize turning (legacy method kept for compatibility)
     fn start_turning(&mut self) {
-        // Initialize turning logic based on direction and route
-        // This will be expanded with actual turning logic
+        // This method is now mostly replaced by initialize_turning_path
+        // Kept for compatibility
     }
 
-    // Continue turning process
+    // Continue turning process (legacy method - will be used if turning_path is None)
     fn continue_turning(&mut self) {
-        // This will be expanded with actual turning logic
+        // This method is now mostly replaced by update_position_along_curve
+        // But we keep it for backward compatibility and for straight paths
 
         // For now, just update angle based on route and direction
         match (self.direction, self.route) {
@@ -327,6 +539,11 @@ impl Vehicle {
 
     // Check if turning is completed
     fn has_completed_turn(&self) -> bool {
+        // If using Bezier curve, check progress
+        if let Some(path) = &self.turning_path {
+            return path.progress >= 1.0;
+        }
+
         // For simple implementation, consider turn completed when
         // angle matches the expected final angle for the route
         match (self.direction, self.route) {
@@ -349,6 +566,9 @@ impl Vehicle {
 
     // Finalize the turning process
     fn complete_turning(&mut self) {
+        // Clear turning path
+        self.turning_path = None;
+
         // Set the final direction based on the turn
         self.direction = self.get_exit_direction();
 
@@ -410,11 +630,38 @@ impl Vehicle {
             Direction::West => (self.position.x - intersection.west_entry).abs() as f64,
         };
 
-        // Calculate time based on current velocity
+        // Calculate time based on current velocity and acceleration
         if self.current_velocity > 0.0 {
-            distance / self.current_velocity
+            // Simple time calculation for constant velocity
+            let time_at_current_speed = distance / self.current_velocity;
+
+            // If accelerating/decelerating, adjust the time estimate
+            if self.physics.current_acceleration.abs() > 0.001 {
+                // Quadratic formula: d = v₀t + ½at²
+                // Solve for t: at² + 2v₀t - 2d = 0
+                let a = self.physics.current_acceleration;
+                let b = 2.0 * self.current_velocity;
+                let c = -2.0 * distance;
+
+                if a.abs() > 0.001 {
+                    let discriminant = b * b - 4.0 * a * c;
+                    if discriminant >= 0.0 {
+                        let t1 = (-b + discriminant.sqrt()) / (2.0 * a);
+                        let t2 = (-b - discriminant.sqrt()) / (2.0 * a);
+
+                        // Return the positive time
+                        if t1 > 0.0 {
+                            return t1;
+                        } else if t2 > 0.0 {
+                            return t2;
+                        }
+                    }
+                }
+            }
+
+            return time_at_current_speed;
         } else {
-            f64::MAX // Avoid division by zero
+            return f64::MAX; // Avoid division by zero
         }
     }
 }
