@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use crate::algorithm::SmartIntersection;
 use crate::input::InputHandler;
-use crate::intersection::Intersection;
+use crate::intersection::{Intersection, lane_route, LaneRoute};
 use crate::renderer::Renderer;
 use crate::statistics::Statistics;
 use crate::vehicle::{Direction, Route, Vehicle};
@@ -23,6 +23,8 @@ pub struct Game<'a> {
     continuous_spawn: bool,
     spawn_cooldown: u32,
     current_cooldown: u32,
+    // Track lane congestion
+    lane_cooldowns: [[u32; 6]; 4], // [direction][lane]
 }
 
 impl<'a> Game<'a> {
@@ -43,6 +45,7 @@ impl<'a> Game<'a> {
             continuous_spawn: false,
             spawn_cooldown: 1000, // 1 second between spawns to prevent spamming
             current_cooldown: 0,
+            lane_cooldowns: [[0; 6]; 4], // Initialize all lane cooldowns to 0
         })
     }
 
@@ -50,13 +53,14 @@ impl<'a> Game<'a> {
         match event {
             Event::KeyDown {
                 keycode: Some(keycode),
+                repeat: false,
                 ..
             } => match keycode {
                 Keycode::Up => {
-                    self.spawn_vehicle(Direction::South);
+                    self.spawn_vehicle(Direction::North);
                 }
                 Keycode::Down => {
-                    self.spawn_vehicle(Direction::North);
+                    self.spawn_vehicle(Direction::South);
                 }
                 Keycode::Left => {
                     self.spawn_vehicle(Direction::East);
@@ -66,6 +70,7 @@ impl<'a> Game<'a> {
                 }
                 Keycode::R => {
                     self.continuous_spawn = !self.continuous_spawn;
+                    println!("Continuous spawn toggled: {}", self.continuous_spawn);
                 }
                 _ => {}
             },
@@ -94,20 +99,23 @@ impl<'a> Game<'a> {
     }
 
     pub fn update(&mut self, delta_time: u32) {
-        println!(
-            "Game update: delta_time={}ms, vehicle count={}, continuous_spawn={}",
-            delta_time,
-            self.vehicles.len(),
-            self.continuous_spawn
-        );
         // Update spawn cooldown
         if self.current_cooldown > 0 {
             self.current_cooldown = self.current_cooldown.saturating_sub(delta_time);
         }
 
+        // Update lane cooldowns
+        for direction in 0..4 {
+            for lane in 0..6 {
+                if self.lane_cooldowns[direction][lane] > 0 {
+                    self.lane_cooldowns[direction][lane] =
+                        self.lane_cooldowns[direction][lane].saturating_sub(delta_time);
+                }
+            }
+        }
+
         // Handle continuous spawning
         if self.continuous_spawn && self.current_cooldown == 0 {
-            println!("Attempting to spawn random vehicle");
             use rand::Rng;
             let mut rng = rand::thread_rng();
             let random_direction = match rng.gen_range(0..4) {
@@ -117,8 +125,7 @@ impl<'a> Game<'a> {
                 _ => Direction::West,
             };
             self.spawn_vehicle(random_direction);
-            self.current_cooldown = self.spawn_cooldown;
-            println!("Spawned vehicle in direction: {:?}", random_direction);
+            self.current_cooldown = self.spawn_cooldown / 2; // Faster spawning in continuous mode
         }
 
         // Update all vehicles
@@ -144,47 +151,81 @@ impl<'a> Game<'a> {
     }
 
     fn spawn_vehicle(&mut self, direction: Direction) {
-        println!(
-            "spawn_vehicle called: direction={:?}, cooldown={}",
-            direction, self.current_cooldown
-        );
+        if self.current_cooldown > 0 {
+            return;
+        }
 
-        if self.current_cooldown == 0 {
-            // Use random route for the vehicle
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
-            let random_route = match rng.gen_range(0..3) {
-                0 => Route::Left,
-                1 => Route::Straight,
-                _ => Route::Right,
-            };
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
 
-            // Check if there's enough space to spawn a new vehicle
-            if self.can_spawn_vehicle(&direction) {
-                let new_vehicle = Vehicle::new(direction, random_route);
-                println!(
-                    "Vehicle spawned: id={}, direction={:?}, route={:?}",
-                    new_vehicle.id, new_vehicle.direction, new_vehicle.route
-                );
-                self.vehicles.push_back(new_vehicle);
-                self.current_cooldown = self.spawn_cooldown;
-            } else {
-                println!("Can't spawn vehicle: not enough space");
-            }
+        // Find an available lane
+        let direction_index = match direction {
+            Direction::North => 0,
+            Direction::South => 1,
+            Direction::East => 2,
+            Direction::West => 3,
+        };
+
+        // Try to find an available lane
+        let mut available_lanes: Vec<usize> = (0..6)
+            .filter(|&lane| self.lane_cooldowns[direction_index][lane] == 0)
+            .collect();
+
+        if available_lanes.is_empty() {
+            println!("No available lanes for direction {:?}", direction);
+            return;
+        }
+
+        // Choose a random available lane
+        let lane_idx = if available_lanes.len() > 1 {
+            available_lanes[rng.gen_range(0..available_lanes.len())]
         } else {
+            available_lanes[0]
+        };
+
+        // Determine valid routes for this lane
+        let lane_route_options = lane_route(lane_idx);
+        let route = match lane_route_options {
+            LaneRoute::Left => Route::Left,
+            LaneRoute::Right => Route::Right,
+            LaneRoute::Straight => Route::Straight,
+            LaneRoute::LeftStraight => {
+                if rng.gen_bool(0.5) { Route::Left } else { Route::Straight }
+            },
+            LaneRoute::StraightRight => {
+                if rng.gen_bool(0.5) { Route::Straight } else { Route::Right }
+            },
+            LaneRoute::Any => {
+                match rng.gen_range(0..3) {
+                    0 => Route::Left,
+                    1 => Route::Straight,
+                    _ => Route::Right,
+                }
+            },
+        };
+
+        // Check if there's enough space to spawn a new vehicle in this lane
+        if self.can_spawn_vehicle_in_lane(&direction, lane_idx) {
+            let new_vehicle = Vehicle::new(direction, lane_idx, route);
             println!(
-                "Can't spawn vehicle: cooldown in progress ({}ms left)",
-                self.current_cooldown
+                "Vehicle spawned: id={}, direction={:?}, lane={}, route={:?}",
+                new_vehicle.id, new_vehicle.direction, lane_idx, new_vehicle.route
             );
+            self.vehicles.push_back(new_vehicle);
+
+            // Set cooldowns
+            self.current_cooldown = self.spawn_cooldown;
+            self.lane_cooldowns[direction_index][lane_idx] = self.spawn_cooldown * 3; // Longer cooldown for specific lane
+        } else {
+            println!("Can't spawn vehicle: not enough space in lane {}", lane_idx);
         }
     }
 
-    fn can_spawn_vehicle(&self, direction: &Direction) -> bool {
-        // Check if there's enough space to spawn a new vehicle
+    fn can_spawn_vehicle_in_lane(&self, direction: &Direction, lane: usize) -> bool {
+        // Check if there's enough space to spawn a new vehicle in this specific lane
         for vehicle in &self.vehicles {
-            if &vehicle.direction == direction
-                && vehicle.distance_from_spawn() < Vehicle::SAFE_DISTANCE * 2.0
-            {
+            if &vehicle.direction == direction && vehicle.lane == lane &&
+                vehicle.distance_from_spawn() < Vehicle::SAFE_DISTANCE * 2.0 {
                 return false;
             }
         }

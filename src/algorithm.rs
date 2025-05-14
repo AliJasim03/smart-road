@@ -7,10 +7,14 @@ pub struct SmartIntersection {
     pub close_calls: u32,
     // Track safe distance violations
     safe_distance_violations: HashMap<u32, Vec<u32>>, // Vehicle ID to list of vehicles it had close calls with
-    // Track congestion by direction
-    congestion_levels: HashMap<Direction, u32>, // Direction to number of vehicles
+    // Track congestion by direction and lane
+    congestion_levels: HashMap<(Direction, usize), u32>, // (Direction, lane) to number of vehicles
     // Enable adaptive mode for high traffic
     adaptive_mode: bool,
+    // Track throughput for each direction
+    direction_priority: [u32; 4], // Priority counter for [North, South, East, West]
+    // Track current vehicle flows
+    current_flows: Vec<(Direction, usize)>, // Currently prioritized (direction, lane) pairs
 }
 
 impl SmartIntersection {
@@ -20,6 +24,8 @@ impl SmartIntersection {
             safe_distance_violations: HashMap::new(),
             congestion_levels: HashMap::new(),
             adaptive_mode: false,
+            direction_priority: [0; 4],
+            current_flows: Vec::new(),
         }
     }
 
@@ -40,25 +46,52 @@ impl SmartIntersection {
         self.check_safe_distances(vehicles);
     }
 
-    // Analyze congestion levels for each direction
+    // Analyze congestion levels for each direction and lane
     fn analyze_congestion(&mut self, vehicles: &VecDeque<Vehicle>) {
         // Reset congestion counts
         self.congestion_levels.clear();
 
-        // Count vehicles per direction
+        // Count vehicles per direction and lane
         for vehicle in vehicles {
             if vehicle.state == VehicleState::Approaching || vehicle.state == VehicleState::Entering {
-                *self.congestion_levels.entry(vehicle.direction).or_insert(0) += 1;
+                let key = (vehicle.direction, vehicle.lane);
+                *self.congestion_levels.entry(key).or_insert(0) += 1;
             }
         }
 
-        // Check if any direction is congested (threshold: 5 vehicles)
-        self.adaptive_mode = self.congestion_levels.values().any(|&count| count > 5);
+        // Calculate total congestion per direction
+        let mut direction_congestion = [0; 4];
+        for ((direction, _), count) in &self.congestion_levels {
+            let dir_index = match direction {
+                Direction::North => 0,
+                Direction::South => 1,
+                Direction::East => 2,
+                Direction::West => 3,
+            };
+            direction_congestion[dir_index] += count;
+        }
+
+        // Check if any direction is heavily congested (threshold: 12 vehicles across all lanes)
+        self.adaptive_mode = direction_congestion.iter().any(|&count| count > 12);
+
+        // Update direction priority based on throughput deficit
+        for i in 0..4 {
+            // Increase priority if congested
+            if direction_congestion[i] > 8 {
+                self.direction_priority[i] += 2;
+            } else if direction_congestion[i] > 4 {
+                self.direction_priority[i] += 1;
+            }
+
+            // Cap priority
+            if self.direction_priority[i] > 10 {
+                self.direction_priority[i] = 10;
+            }
+        }
 
         // Debug print of congestion levels
-        for (dir, count) in &self.congestion_levels {
-            println!("Congestion {:?}: {} vehicles", dir, count);
-        }
+        println!("Direction congestion: {:?}", direction_congestion);
+        println!("Direction priority: {:?}", self.direction_priority);
         println!("Adaptive mode: {}", self.adaptive_mode);
     }
 
@@ -110,7 +143,7 @@ impl SmartIntersection {
                         continue;
                     }
 
-                    // Check if vehicles could collide
+                    // Check if vehicles could collide and are in conflicting lanes
                     if vehicle_a.could_collide_with(vehicle_b, intersection) {
                         // Check if vehicle_a should yield to vehicle_b
                         if self.should_yield(vehicle_a, vehicle_b, intersection) {
@@ -135,28 +168,51 @@ impl SmartIntersection {
 
     // Batch process vehicles in high congestion scenario
     fn batch_process_vehicles(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection) {
-        // Group vehicles by direction
-        let mut direction_groups: HashMap<Direction, Vec<usize>> = HashMap::new();
+        // Group vehicles by direction and lane
+        let mut direction_lane_groups: HashMap<(Direction, usize), Vec<usize>> = HashMap::new();
 
         for (i, vehicle) in vehicles.iter().enumerate() {
             if vehicle.state != VehicleState::Completed {
-                direction_groups.entry(vehicle.direction).or_default().push(i);
+                direction_lane_groups.entry((vehicle.direction, vehicle.lane)).or_default().push(i);
             }
         }
 
-        // Find most congested direction
-        let mut max_congestion = 0;
+        // Find the direction with highest priority
+        let mut max_priority = 0;
         let mut priority_direction = None;
 
-        for (dir, count) in &self.congestion_levels {
-            if *count > max_congestion {
-                max_congestion = *count;
-                priority_direction = Some(*dir);
+        for (i, &priority) in self.direction_priority.iter().enumerate() {
+            if priority > max_priority {
+                max_priority = priority;
+                priority_direction = Some(match i {
+                    0 => Direction::North,
+                    1 => Direction::South,
+                    2 => Direction::East,
+                    _ => Direction::West,
+                });
             }
         }
 
-        // Sort each direction group by distance to intersection
-        for (_, indices) in direction_groups.iter_mut() {
+        // Update current flows if needed
+        if self.current_flows.is_empty() && priority_direction.is_some() {
+            // Add all lanes from the priority direction to the flow
+            let dir = priority_direction.unwrap();
+            for lane in 0..6 {
+                self.current_flows.push((dir, lane));
+            }
+
+            // Decrease the priority of this direction
+            let dir_index = match dir {
+                Direction::North => 0,
+                Direction::South => 1,
+                Direction::East => 2,
+                Direction::West => 3,
+            };
+            self.direction_priority[dir_index] = self.direction_priority[dir_index].saturating_sub(3);
+        }
+
+        // Sort each direction-lane group by distance to intersection
+        for (_, indices) in direction_lane_groups.iter_mut() {
             indices.sort_by(|&a, &b| {
                 let time_a = vehicles[a].time_to_intersection(intersection);
                 let time_b = vehicles[b].time_to_intersection(intersection);
@@ -164,96 +220,99 @@ impl SmartIntersection {
             });
         }
 
-        // Give green wave to priority direction
-        if let Some(priority_dir) = priority_direction {
-            println!("Priority direction: {:?} with {} vehicles", priority_dir, max_congestion);
-
-            if let Some(indices) = direction_groups.get(&priority_dir) {
-                // Process vehicles in priority direction
+        // Process vehicles in prioritized flows
+        for &(direction, lane) in &self.current_flows {
+            if let Some(indices) = direction_lane_groups.get(&(direction, lane)) {
+                // Process vehicles in this flow lane
                 for (position, &idx) in indices.iter().enumerate() {
-                    if position < 3 {
-                        // First 3 vehicles get fast
+                    if position < 2 {
+                        // First 2 vehicles get fast
                         vehicles[idx].set_target_velocity(VelocityLevel::Fast);
-                        println!("Vehicle {} in priority direction set to FAST", vehicles[idx].id);
-                    } else {
-                        // Rest get medium
+                    } else if position < 4 {
+                        // Next 2 get medium
                         vehicles[idx].set_target_velocity(VelocityLevel::Medium);
-                        println!("Vehicle {} in priority direction set to MEDIUM", vehicles[idx].id);
+                    } else {
+                        // Rest get slow
+                        vehicles[idx].set_target_velocity(VelocityLevel::Slow);
                     }
                 }
             }
+        }
 
-            // Process crossing traffic - slow down if they could conflict
-            for (dir, indices) in &direction_groups {
-                if *dir != priority_dir && Self::could_conflict(*dir, priority_dir) {
-                    for &idx in indices {
-                        // Skip vehicles already in the intersection
-                        if vehicles[idx].state == VehicleState::Turning {
-                            continue;
-                        }
+        // Process crossing traffic - slow down if they could conflict with prioritized flows
+        for ((dir, lane), indices) in &direction_lane_groups {
+            // Skip if this is a prioritized flow
+            if self.current_flows.contains(&(*dir, *lane)) {
+                continue;
+            }
 
-                        // Check if this vehicle is close to entering the intersection
-                        let time_to_intersection = vehicles[idx].time_to_intersection(intersection);
+            // Check if this flow conflicts with any prioritized flow
+            let conflicts = self.current_flows.iter().any(|&(pdir, _)| {
+                Self::could_conflict(*dir, pdir)
+            });
 
-                        if time_to_intersection < 2.0 {
-                            // Vehicle is about to enter - slow down
-                            vehicles[idx].set_target_velocity(VelocityLevel::Slow);
-                            println!("Vehicle {} in crossing direction {:?} set to SLOW", vehicles[idx].id, dir);
+            if conflicts {
+                for &idx in indices {
+                    // Skip vehicles already in the intersection
+                    if vehicles[idx].state == VehicleState::Turning {
+                        continue;
+                    }
+
+                    // Check if this vehicle is close to entering the intersection
+                    let time_to_intersection = vehicles[idx].time_to_intersection(intersection);
+
+                    if time_to_intersection < 2.0 {
+                        // Vehicle is about to enter - slow down
+                        vehicles[idx].set_target_velocity(VelocityLevel::Slow);
+                    }
+                }
+            }
+        }
+
+        // Handle vehicles in the intersection - collect conflicts first, then adjust speeds
+        let mut vehicles_to_slow_down = Vec::new();
+
+        // First pass: identify vehicles that need to slow down
+        for i in 0..vehicles.len() {
+            let vehicle = &vehicles[i];
+
+            if vehicle.state == VehicleState::Turning {
+                // Check for potential conflicts
+                for j in 0..vehicles.len() {
+                    if i != j {
+                        let other = &vehicles[j];
+
+                        if other.state != VehicleState::Completed &&
+                            vehicle.could_collide_with(other, intersection) {
+                            // Add to the list that needs to slow down
+                            vehicles_to_slow_down.push(i);
+                            break;
                         }
                     }
                 }
             }
+        }
 
-            // Handle vehicles in the intersection - collect conflicts first, then adjust speeds
-            // Create a data structure to track vehicles that need to slow down
-            let mut vehicles_to_slow_down = Vec::new();
-
-            // First pass: identify vehicles that need to slow down
-            for i in 0..vehicles.len() {
-                let vehicle = &vehicles[i];
-
-                if vehicle.state == VehicleState::Turning {
-                    // Check for potential conflicts
-                    for j in 0..vehicles.len() {
-                        if i != j {
-                            let other = &vehicles[j];
-
-                            if other.state != VehicleState::Completed &&
-                                vehicle.could_collide_with(other, intersection) {
-                                // Add to the list that needs to slow down
-                                vehicles_to_slow_down.push(i);
-                                println!("Potential collision between vehicles {} and {} - will slow",
-                                         vehicle.id, other.id);
-                                break;
-                            }
-                        }
-                    }
-                }
+        // Second pass: apply medium speed to all turning vehicles
+        for i in 0..vehicles.len() {
+            if vehicles[i].state == VehicleState::Turning {
+                vehicles[i].set_target_velocity(VelocityLevel::Medium);
             }
+        }
 
-            // Second pass: apply medium speed to all turning vehicles
-            for i in 0..vehicles.len() {
-                if vehicles[i].state == VehicleState::Turning {
-                    vehicles[i].set_target_velocity(VelocityLevel::Medium);
-                }
-            }
-
-            // Third pass: slow down vehicles with potential conflicts
-            for idx in vehicles_to_slow_down {
-                vehicles[idx].set_target_velocity(VelocityLevel::Slow);
-            }
-
-        } else {
-            // Fallback to standard processing if no priority direction
-            println!("No priority direction detected");
+        // Third pass: slow down vehicles with potential conflicts
+        for idx in vehicles_to_slow_down {
+            vehicles[idx].set_target_velocity(VelocityLevel::Slow);
         }
     }
+
     // Determine if vehicle_a should yield to vehicle_b
     fn should_yield(&self, vehicle_a: &Vehicle, vehicle_b: &Vehicle, intersection: &Intersection) -> bool {
         // Priority rules:
         // 1. Vehicles already in the intersection have priority
         // 2. Vehicles coming from the right have priority (right-hand rule)
-        // 3. Vehicles that are closer to the intersection have priority
+        // 3. Vehicles in prioritized flows have priority
+        // 4. Vehicles that are closer to the intersection have priority
 
         // Rule 1: Vehicles in the intersection have priority
         if vehicle_b.state == VehicleState::Turning && vehicle_a.state == VehicleState::Approaching {
@@ -265,8 +324,6 @@ impl SmartIntersection {
 
         // Rule 2: Right-hand rule (vehicle coming from the right has priority)
         if vehicle_a.state == VehicleState::Approaching && vehicle_b.state == VehicleState::Approaching {
-            use crate::vehicle::Direction;
-
             match (vehicle_a.direction, vehicle_b.direction) {
                 (Direction::North, Direction::East) => return true,
                 (Direction::East, Direction::South) => return true,
@@ -280,7 +337,18 @@ impl SmartIntersection {
             }
         }
 
-        // Rule 3: Vehicle closer to the intersection has priority
+        // Rule 3: Prioritized flows have priority
+        let a_is_prioritized = self.current_flows.contains(&(vehicle_a.direction, vehicle_a.lane));
+        let b_is_prioritized = self.current_flows.contains(&(vehicle_b.direction, vehicle_b.lane));
+
+        if b_is_prioritized && !a_is_prioritized {
+            return true;
+        }
+        if a_is_prioritized && !b_is_prioritized {
+            return false;
+        }
+
+        // Rule 4: Vehicle closer to the intersection has priority
         let time_a = vehicle_a.time_to_intersection(intersection);
         let time_b = vehicle_b.time_to_intersection(intersection);
 
@@ -295,6 +363,8 @@ impl SmartIntersection {
             (Direction::North, Direction::West) | (Direction::West, Direction::North) => true,
             (Direction::South, Direction::East) | (Direction::East, Direction::South) => true,
             (Direction::South, Direction::West) | (Direction::West, Direction::South) => true,
+            (Direction::North, Direction::South) | (Direction::South, Direction::North) => true,
+            (Direction::East, Direction::West) | (Direction::West, Direction::East) => true,
             _ => false,
         }
     }
@@ -313,31 +383,31 @@ impl SmartIntersection {
                 }
 
                 // Check if vehicles are in the same lane and direction
-                if vehicle_a.direction == vehicle_b.direction {
+                if vehicle_a.direction == vehicle_b.direction && vehicle_a.lane == vehicle_b.lane {
                     // Calculate distance between vehicles
                     let distance = match vehicle_a.direction {
-                        crate::vehicle::Direction::North => {
+                        Direction::North => {
                             if vehicle_a.position.y < vehicle_b.position.y {
                                 (vehicle_b.position.y - vehicle_a.position.y) as f64
                             } else {
                                 continue; // vehicle_a is behind vehicle_b
                             }
                         }
-                        crate::vehicle::Direction::South => {
+                        Direction::South => {
                             if vehicle_a.position.y > vehicle_b.position.y {
                                 (vehicle_a.position.y - vehicle_b.position.y) as f64
                             } else {
                                 continue; // vehicle_a is behind vehicle_b
                             }
                         }
-                        crate::vehicle::Direction::East => {
+                        Direction::East => {
                             if vehicle_a.position.x > vehicle_b.position.x {
                                 (vehicle_a.position.x - vehicle_b.position.x) as f64
                             } else {
                                 continue; // vehicle_a is behind vehicle_b
                             }
                         }
-                        crate::vehicle::Direction::West => {
+                        Direction::West => {
                             if vehicle_a.position.x < vehicle_b.position.x {
                                 (vehicle_b.position.x - vehicle_a.position.x) as f64
                             } else {

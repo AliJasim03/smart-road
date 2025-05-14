@@ -1,9 +1,9 @@
 use sdl2::rect::Rect;
 
 // Define dimensions for the intersection
-pub const ROAD_WIDTH: u32 = 60;
+pub const ROAD_WIDTH: u32 = 180; // Increased for 6 lanes (30 pixels per lane)
 pub const INTERSECTION_SIZE: u32 = ROAD_WIDTH * 2;
-pub const LANE_WIDTH: u32 = ROAD_WIDTH / 2;
+pub const LANE_WIDTH: u32 = 30; // Width of a single lane
 
 // Define the intersection area as a function
 pub fn intersection_area() -> Rect {
@@ -24,37 +24,52 @@ pub fn intersection_center() -> (i32, i32) {
     )
 }
 
-// Lane positions as functions
-pub fn north_incoming_lane() -> i32 {
-    intersection_center().0 - LANE_WIDTH as i32 / 2
+// Lane positions for all 6 lanes in each direction
+pub fn north_lanes() -> Vec<i32> {
+    let center = intersection_center().0;
+    let first_lane = center - (ROAD_WIDTH as i32 / 2) + (LANE_WIDTH as i32 / 2);
+    (0..6).map(|i| first_lane + i * LANE_WIDTH as i32).collect()
 }
 
-pub fn north_outgoing_lane() -> i32 {
-    intersection_center().0 + LANE_WIDTH as i32 / 2
+pub fn south_lanes() -> Vec<i32> {
+    let center = intersection_center().0;
+    let first_lane = center + (ROAD_WIDTH as i32 / 2) - (LANE_WIDTH as i32 / 2);
+    (0..6).map(|i| first_lane - i * LANE_WIDTH as i32).collect()
 }
 
-pub fn south_incoming_lane() -> i32 {
-    intersection_center().0 + LANE_WIDTH as i32 / 2
+pub fn east_lanes() -> Vec<i32> {
+    let center = intersection_center().1;
+    let first_lane = center - (ROAD_WIDTH as i32 / 2) + (LANE_WIDTH as i32 / 2);
+    (0..6).map(|i| first_lane + i * LANE_WIDTH as i32).collect()
 }
 
-pub fn south_outgoing_lane() -> i32 {
-    intersection_center().0 - LANE_WIDTH as i32 / 2
+pub fn west_lanes() -> Vec<i32> {
+    let center = intersection_center().1;
+    let first_lane = center + (ROAD_WIDTH as i32 / 2) - (LANE_WIDTH as i32 / 2);
+    (0..6).map(|i| first_lane - i * LANE_WIDTH as i32).collect()
 }
 
-pub fn east_incoming_lane() -> i32 {
-    intersection_center().1 - LANE_WIDTH as i32 / 2
+// Define routes for each lane
+pub enum LaneRoute {
+    Left,     // Left turn only lane
+    LeftStraight, // Left turn or straight
+    Straight, // Straight only lane
+    StraightRight, // Straight or right turn
+    Right,    // Right turn only lane
+    Any,      // Any direction
 }
 
-pub fn east_outgoing_lane() -> i32 {
-    intersection_center().1 + LANE_WIDTH as i32 / 2
-}
-
-pub fn west_incoming_lane() -> i32 {
-    intersection_center().1 + LANE_WIDTH as i32 / 2
-}
-
-pub fn west_outgoing_lane() -> i32 {
-    intersection_center().1 - LANE_WIDTH as i32 / 2
+// Get the route options for a specific lane
+pub fn lane_route(lane_index: usize) -> LaneRoute {
+    match lane_index {
+        0 => LaneRoute::Left,
+        1 => LaneRoute::LeftStraight,
+        2 => LaneRoute::Straight,
+        3 => LaneRoute::Straight,
+        4 => LaneRoute::StraightRight,
+        5 => LaneRoute::Right,
+        _ => LaneRoute::Any,
+    }
 }
 
 // Define the paths for each route through the intersection
@@ -134,7 +149,7 @@ impl Intersection {
         }
     }
 
-    // Get the path for a given direction and route
+    // Get the path for a given direction, lane and route
     pub fn get_path(&self, direction: &crate::vehicle::Direction, route: &crate::vehicle::Route) -> Path {
         use crate::vehicle::{Direction, Route};
 

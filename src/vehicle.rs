@@ -36,6 +36,15 @@ pub enum VelocityLevel {
     Fast,
 }
 
+// Vehicle color based on route
+#[derive(Debug, Clone, Copy)]
+pub enum VehicleColor {
+    Red,    // Left turn
+    Green,  // Straight
+    Blue,   // Right turn
+    Yellow, // Special case
+}
+
 // New struct for Bezier curve-based turning
 struct TurningPath {
     start_point: (f64, f64),
@@ -59,6 +68,7 @@ pub struct Vehicle {
     pub position: Point, // Current position
     position_f: (f64, f64), // For calculation - more precise
     pub direction: Direction,
+    pub lane: usize, // Lane index (0-5 for 6 lanes)
     pub route: Route,
     pub state: VehicleState,
     pub velocity_level: VelocityLevel,
@@ -70,6 +80,7 @@ pub struct Vehicle {
     pub time_in_intersection: u32, // Time spent within the intersection in milliseconds
     pub start_time: std::time::Instant, // When the vehicle was created
     pub entry_time: Option<std::time::Instant>, // When the vehicle entered the intersection
+    pub color: VehicleColor, // Vehicle color based on route
     turning_path: Option<TurningPath>, // Bezier curve path for turning
     physics: VehiclePhysics, // Physics properties for realistic movement
 }
@@ -84,28 +95,24 @@ impl Vehicle {
     pub const WIDTH: u32 = 40;
     pub const HEIGHT: u32 = 80;
 
-    pub fn new(direction: Direction, route: Route) -> Self {
+    pub fn new(direction: Direction, lane: usize, route: Route) -> Self {
         // Get a unique ID using the atomic counter
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
 
-        // Set initial position based on direction
+        // Get lane position based on direction and lane index
+        let lane_position = match direction {
+            Direction::North => crate::intersection::south_lanes()[lane],
+            Direction::South => crate::intersection::north_lanes()[lane],
+            Direction::East => crate::intersection::west_lanes()[lane],
+            Direction::West => crate::intersection::east_lanes()[lane],
+        };
+
+        // Set initial position based on direction and lane
         let (pos_x, pos_y) = match direction {
-            Direction::North => {
-                let x = intersection_center().0 - (LANE_WIDTH as i32 / 2);
-                (x as f64, 0.0)
-            },
-            Direction::South => {
-                let x = intersection_center().0 + (LANE_WIDTH as i32 / 2);
-                (x as f64, crate::WINDOW_HEIGHT as f64)
-            },
-            Direction::East => {
-                let y = intersection_center().1 - (LANE_WIDTH as i32 / 2);
-                (crate::WINDOW_WIDTH as f64, y as f64)
-            },
-            Direction::West => {
-                let y = intersection_center().1 + (LANE_WIDTH as i32 / 2);
-                (0.0, y as f64)
-            },
+            Direction::North => (lane_position as f64, crate::WINDOW_HEIGHT as f64),
+            Direction::South => (lane_position as f64, 0.0),
+            Direction::East => (0.0, lane_position as f64),
+            Direction::West => (crate::WINDOW_WIDTH as f64, lane_position as f64),
         };
 
         // Create the Point for rendering
@@ -134,6 +141,13 @@ impl Vehicle {
             VelocityLevel::Fast => Self::FAST_VELOCITY,
         };
 
+        // Set color based on route
+        let color = match route {
+            Route::Left => VehicleColor::Red,
+            Route::Straight => VehicleColor::Blue,
+            Route::Right => VehicleColor::Green,
+        };
+
         // Initialize physics properties with slight randomization for variety
         let physics = VehiclePhysics {
             max_acceleration: rng.gen_range(25.0..35.0),  // pixels/second²
@@ -149,6 +163,7 @@ impl Vehicle {
             position,
             position_f: (pos_x, pos_y),
             direction,
+            lane,
             route,
             state: VehicleState::Approaching,
             velocity_level,
@@ -160,6 +175,7 @@ impl Vehicle {
             time_in_intersection: 0,
             start_time: std::time::Instant::now(),
             entry_time: None,
+            color,
             turning_path: None,
             physics,
         }
@@ -168,11 +184,6 @@ impl Vehicle {
     // Update the vehicle's position and state
     pub fn update(&mut self, delta_time: u32, intersection: &Intersection) {
         let dt = delta_time as f64 / 1000.0; // Convert to seconds
-
-        // Debug print
-        println!("Vehicle {} update: dt={}, velocity={}, position=({},{}), position_f=({},{})",
-                 self.id, dt, self.current_velocity, self.position.x, self.position.y,
-                 self.position_f.0, self.position_f.1);
 
         // Calculate appropriate acceleration based on target velocity
         self.calculate_acceleration();
@@ -195,10 +206,10 @@ impl Vehicle {
                     self.position_f.1 += distance;
                 }
                 Direction::East => {
-                    self.position_f.0 -= distance;
+                    self.position_f.0 += distance;
                 }
                 Direction::West => {
-                    self.position_f.0 += distance;
+                    self.position_f.0 -= distance;
                 }
             }
 
@@ -265,11 +276,6 @@ impl Vehicle {
 
         // Ensure velocity stays within bounds
         self.current_velocity = self.current_velocity.max(0.0).min(Vehicle::FAST_VELOCITY);
-
-        // Debug physics info
-        println!("Vehicle {} physics: target={}, current={}, accel={}, drag={}, mass={}",
-                 self.id, self.target_velocity, self.current_velocity,
-                 self.physics.current_acceleration, drag_deceleration, self.physics.mass);
     }
 
     // Use quadratic Bezier curve for smooth turning
@@ -336,9 +342,6 @@ impl Vehicle {
                     if self.has_completed_turn() {
                         self.state = VehicleState::Exiting;
                         self.complete_turning();
-                    } else {
-                        // Legacy turning logic (should be unused with Bezier curves active)
-                        self.continue_turning();
                     }
                 }
                 // If using Bezier curves, update_position_along_curve handles state transition
@@ -352,79 +355,98 @@ impl Vehicle {
         }
     }
 
-    // Initialize the Bezier curve turning path based on direction and route
+    // Initialize the Bezier curve turning path based on direction, lane and route
     fn initialize_turning_path(&mut self) {
         let center = intersection_center();
         let center_x = center.0 as f64;
         let center_y = center.1 as f64;
-        let lane_offset = LANE_WIDTH as f64 / 2.0;
+
+        // Get lane offsets - we'll adjust for the specific lane
+        let lane_offset = LANE_WIDTH as f64 * (self.lane as f64 + 0.5);
 
         // Create turning path based on direction and route
+        // These calculations need to account for the 6-lane setup
         match (self.direction, self.route) {
             // Left turns (90° counterclockwise)
             (Direction::North, Route::Left) => {
+                let start_x = center_x - lane_offset;
+                let start_y = center_y - LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x - lane_offset, center_y - lane_offset),
-                    control_point: (center_x - lane_offset * 2.0, center_y - lane_offset * 2.0),
-                    end_point: (center_x - lane_offset * 3.0, center_y),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x - LANE_WIDTH as f64, start_y - LANE_WIDTH as f64),
+                    end_point: (start_x - 3.0 * LANE_WIDTH as f64, center_y),
                     progress: 0.0,
                 });
             }
             (Direction::South, Route::Left) => {
+                let start_x = center_x + lane_offset;
+                let start_y = center_y + LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x + lane_offset, center_y + lane_offset),
-                    control_point: (center_x + lane_offset * 2.0, center_y + lane_offset * 2.0),
-                    end_point: (center_x + lane_offset * 3.0, center_y),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x + LANE_WIDTH as f64, start_y + LANE_WIDTH as f64),
+                    end_point: (start_x + 3.0 * LANE_WIDTH as f64, center_y),
                     progress: 0.0,
                 });
             }
             (Direction::East, Route::Left) => {
+                let start_x = center_x + LANE_WIDTH as f64;
+                let start_y = center_y - lane_offset;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x + lane_offset, center_y - lane_offset),
-                    control_point: (center_x + lane_offset * 2.0, center_y - lane_offset * 2.0),
-                    end_point: (center_x, center_y - lane_offset * 3.0),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x + LANE_WIDTH as f64, start_y - LANE_WIDTH as f64),
+                    end_point: (center_x, start_y - 3.0 * LANE_WIDTH as f64),
                     progress: 0.0,
                 });
             }
             (Direction::West, Route::Left) => {
+                let start_x = center_x - LANE_WIDTH as f64;
+                let start_y = center_y + lane_offset;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x - lane_offset, center_y + lane_offset),
-                    control_point: (center_x - lane_offset * 2.0, center_y + lane_offset * 2.0),
-                    end_point: (center_x, center_y + lane_offset * 3.0),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x - LANE_WIDTH as f64, start_y + LANE_WIDTH as f64),
+                    end_point: (center_x, start_y + 3.0 * LANE_WIDTH as f64),
                     progress: 0.0,
                 });
             }
 
             // Right turns (90° clockwise)
             (Direction::North, Route::Right) => {
+                let start_x = center_x - lane_offset;
+                let start_y = center_y - LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x - lane_offset, center_y - lane_offset),
-                    control_point: (center_x - lane_offset * 0.5, center_y - lane_offset * 2.0),
-                    end_point: (center_x, center_y - lane_offset * 3.0),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x, start_y - LANE_WIDTH as f64),
+                    end_point: (center_x, start_y - 3.0 * LANE_WIDTH as f64),
                     progress: 0.0,
                 });
             }
             (Direction::South, Route::Right) => {
+                let start_x = center_x + lane_offset;
+                let start_y = center_y + LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x + lane_offset, center_y + lane_offset),
-                    control_point: (center_x + lane_offset * 0.5, center_y + lane_offset * 2.0),
-                    end_point: (center_x, center_y + lane_offset * 3.0),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x, start_y + LANE_WIDTH as f64),
+                    end_point: (center_x, start_y + 3.0 * LANE_WIDTH as f64),
                     progress: 0.0,
                 });
             }
             (Direction::East, Route::Right) => {
+                let start_x = center_x + LANE_WIDTH as f64;
+                let start_y = center_y - lane_offset;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x + lane_offset, center_y - lane_offset),
-                    control_point: (center_x + lane_offset * 2.0, center_y - lane_offset * 0.5),
-                    end_point: (center_x + lane_offset * 3.0, center_y),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x + LANE_WIDTH as f64, start_y),
+                    end_point: (start_x + 3.0 * LANE_WIDTH as f64, center_y),
                     progress: 0.0,
                 });
             }
             (Direction::West, Route::Right) => {
+                let start_x = center_x - LANE_WIDTH as f64;
+                let start_y = center_y + lane_offset;
                 self.turning_path = Some(TurningPath {
-                    start_point: (center_x - lane_offset, center_y + lane_offset),
-                    control_point: (center_x - lane_offset * 2.0, center_y + lane_offset * 0.5),
-                    end_point: (center_x - lane_offset * 3.0, center_y),
+                    start_point: (start_x, start_y),
+                    control_point: (start_x - LANE_WIDTH as f64, start_y),
+                    end_point: (start_x - 3.0 * LANE_WIDTH as f64, center_y),
                     progress: 0.0,
                 });
             }
@@ -439,10 +461,10 @@ impl Vehicle {
     // Check if vehicle has entered the intersection area
     pub fn has_entered_intersection(&self, intersection: &Intersection) -> bool {
         match self.direction {
-            Direction::North => self.position.y <= intersection.north_entry,
-            Direction::South => self.position.y >= intersection.south_entry,
-            Direction::East => self.position.x <= intersection.east_entry,
-            Direction::West => self.position.x >= intersection.west_entry,
+            Direction::North => self.position.y <= intersection.south_entry,
+            Direction::South => self.position.y >= intersection.north_entry,
+            Direction::East => self.position.x >= intersection.west_entry,
+            Direction::West => self.position.x <= intersection.east_entry,
         }
     }
 
@@ -484,57 +506,7 @@ impl Vehicle {
                 (self.position.y - center_y).pow(2);
 
         // Check if within a certain radius of the center
-        distance_squared < (LANE_WIDTH as i32 * 2).pow(2)
-    }
-
-    // Initialize turning (legacy method kept for compatibility)
-    fn start_turning(&mut self) {
-        // This method is now mostly replaced by initialize_turning_path
-        // Kept for compatibility
-    }
-
-    // Continue turning process (legacy method - will be used if turning_path is None)
-    fn continue_turning(&mut self) {
-        // This method is now mostly replaced by update_position_along_curve
-        // But we keep it for backward compatibility and for straight paths
-
-        // For now, just update angle based on route and direction
-        match (self.direction, self.route) {
-            // Left turn: 90 degrees counterclockwise
-            (Direction::North, Route::Left) => {
-                self.angle = (self.angle - 1.0) % 360.0;
-                if self.angle < 0.0 { self.angle += 360.0; }
-            }
-            (Direction::South, Route::Left) => {
-                self.angle = (self.angle - 1.0) % 360.0;
-                if self.angle < 0.0 { self.angle += 360.0; }
-            }
-            (Direction::East, Route::Left) => {
-                self.angle = (self.angle - 1.0) % 360.0;
-                if self.angle < 0.0 { self.angle += 360.0; }
-            }
-            (Direction::West, Route::Left) => {
-                self.angle = (self.angle - 1.0) % 360.0;
-                if self.angle < 0.0 { self.angle += 360.0; }
-            }
-
-            // Right turn: 90 degrees clockwise
-            (Direction::North, Route::Right) => {
-                self.angle = (self.angle + 1.0) % 360.0;
-            }
-            (Direction::South, Route::Right) => {
-                self.angle = (self.angle + 1.0) % 360.0;
-            }
-            (Direction::East, Route::Right) => {
-                self.angle = (self.angle + 1.0) % 360.0;
-            }
-            (Direction::West, Route::Right) => {
-                self.angle = (self.angle + 1.0) % 360.0;
-            }
-
-            // Straight: no change in angle
-            _ => {}
-        }
+        distance_squared < (LANE_WIDTH as i32 * 6).pow(2)
     }
 
     // Check if turning is completed
@@ -544,23 +516,33 @@ impl Vehicle {
             return path.progress >= 1.0;
         }
 
-        // For simple implementation, consider turn completed when
-        // angle matches the expected final angle for the route
-        match (self.direction, self.route) {
-            // Left turns should end at these angles
-            (Direction::North, Route::Left) => (self.angle - 270.0).abs() < 5.0,
-            (Direction::South, Route::Left) => (self.angle - 90.0).abs() < 5.0,
-            (Direction::East, Route::Left) => (self.angle - 0.0).abs() < 5.0 || (self.angle - 360.0).abs() < 5.0,
-            (Direction::West, Route::Left) => (self.angle - 180.0).abs() < 5.0,
+        // For straight routes, we've crossed the center of the intersection
+        if self.route == Route::Straight {
+            let center = intersection_center();
+            match self.direction {
+                Direction::North => self.position.y > center.1,
+                Direction::South => self.position.y < center.1,
+                Direction::East => self.position.x < center.0,
+                Direction::West => self.position.x > center.0,
+            }
+        } else {
+            // For turning routes without a path, use angle-based detection
+            match (self.direction, self.route) {
+                // Left turns should end at these angles
+                (Direction::North, Route::Left) => (self.angle - 270.0).abs() < 5.0,
+                (Direction::South, Route::Left) => (self.angle - 90.0).abs() < 5.0,
+                (Direction::East, Route::Left) => (self.angle - 0.0).abs() < 5.0 || (self.angle - 360.0).abs() < 5.0,
+                (Direction::West, Route::Left) => (self.angle - 180.0).abs() < 5.0,
 
-            // Right turns should end at these angles
-            (Direction::North, Route::Right) => (self.angle - 90.0).abs() < 5.0,
-            (Direction::South, Route::Right) => (self.angle - 270.0).abs() < 5.0,
-            (Direction::East, Route::Right) => (self.angle - 180.0).abs() < 5.0,
-            (Direction::West, Route::Right) => (self.angle - 0.0).abs() < 5.0 || (self.angle - 360.0).abs() < 5.0,
+                // Right turns should end at these angles
+                (Direction::North, Route::Right) => (self.angle - 90.0).abs() < 5.0,
+                (Direction::South, Route::Right) => (self.angle - 270.0).abs() < 5.0,
+                (Direction::East, Route::Right) => (self.angle - 180.0).abs() < 5.0,
+                (Direction::West, Route::Right) => (self.angle - 0.0).abs() < 5.0 || (self.angle - 360.0).abs() < 5.0,
 
-            // Straight routes don't need to complete a turn
-            (_, Route::Straight) => true,
+                // Straight routes handled above
+                _ => false,
+            }
         }
     }
 
@@ -584,10 +566,10 @@ impl Vehicle {
     // Get the distance from the spawn point
     pub fn distance_from_spawn(&self) -> f64 {
         match self.direction {
-            Direction::North => self.position.y as f64,
-            Direction::South => (crate::WINDOW_HEIGHT as i32 - self.position.y) as f64,
-            Direction::East => (crate::WINDOW_WIDTH as i32 - self.position.x) as f64,
-            Direction::West => self.position.x as f64,
+            Direction::North => crate::WINDOW_HEIGHT as f64 - self.position.y as f64,
+            Direction::South => self.position.y as f64,
+            Direction::East => self.position.x as f64,
+            Direction::West => crate::WINDOW_WIDTH as f64 - self.position.x as f64,
         }
     }
 
@@ -624,44 +606,17 @@ impl Vehicle {
 
         // Calculate distance to intersection entry point
         let distance = match self.direction {
-            Direction::North => (self.position.y - intersection.north_entry).abs() as f64,
-            Direction::South => (self.position.y - intersection.south_entry).abs() as f64,
-            Direction::East => (self.position.x - intersection.east_entry).abs() as f64,
-            Direction::West => (self.position.x - intersection.west_entry).abs() as f64,
+            Direction::North => (self.position.y - intersection.south_entry).abs() as f64,
+            Direction::South => (self.position.y - intersection.north_entry).abs() as f64,
+            Direction::East => (self.position.x - intersection.west_entry).abs() as f64,
+            Direction::West => (self.position.x - intersection.east_entry).abs() as f64,
         };
 
-        // Calculate time based on current velocity and acceleration
+        // Calculate time based on current velocity
         if self.current_velocity > 0.0 {
-            // Simple time calculation for constant velocity
-            let time_at_current_speed = distance / self.current_velocity;
-
-            // If accelerating/decelerating, adjust the time estimate
-            if self.physics.current_acceleration.abs() > 0.001 {
-                // Quadratic formula: d = v₀t + ½at²
-                // Solve for t: at² + 2v₀t - 2d = 0
-                let a = self.physics.current_acceleration;
-                let b = 2.0 * self.current_velocity;
-                let c = -2.0 * distance;
-
-                if a.abs() > 0.001 {
-                    let discriminant = b * b - 4.0 * a * c;
-                    if discriminant >= 0.0 {
-                        let t1 = (-b + discriminant.sqrt()) / (2.0 * a);
-                        let t2 = (-b - discriminant.sqrt()) / (2.0 * a);
-
-                        // Return the positive time
-                        if t1 > 0.0 {
-                            return t1;
-                        } else if t2 > 0.0 {
-                            return t2;
-                        }
-                    }
-                }
-            }
-
-            return time_at_current_speed;
+            distance / self.current_velocity
         } else {
-            return f64::MAX; // Avoid division by zero
+            f64::MAX // Avoid division by zero
         }
     }
 }

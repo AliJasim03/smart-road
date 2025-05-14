@@ -10,8 +10,8 @@ mod input;
 mod algorithm;
 mod statistics;
 
-pub const WINDOW_WIDTH: u32 = 800;
-pub const WINDOW_HEIGHT: u32 = 600;
+pub const WINDOW_WIDTH: u32 = 1024; // Increased to better show 6 lanes
+pub const WINDOW_HEIGHT: u32 = 768; // Increased to better show 6 lanes
 const FPS: u32 = 60;
 const FRAME_DELAY: u32 = 1000 / FPS;
 
@@ -22,7 +22,7 @@ fn main() -> Result<(), String> {
 
     // Create window
     let window = video_subsystem
-        .window("Smart Road Simulation", WINDOW_WIDTH, WINDOW_HEIGHT)
+        .window("Smart Road Simulation (6-Lane Intersection)", WINDOW_WIDTH, WINDOW_HEIGHT)
         .position_centered()
         .build()
         .map_err(|e| e.to_string())?;
@@ -52,6 +52,15 @@ fn main() -> Result<(), String> {
     let mut frame_time;
     let mut last_frame = Instant::now();
 
+    println!("Smart Road Simulation started");
+    println!("Controls:");
+    println!("- Arrow Up: Generate vehicles from south");
+    println!("- Arrow Down: Generate vehicles from north");
+    println!("- Arrow Left: Generate vehicles from east");
+    println!("- Arrow Right: Generate vehicles from west");
+    println!("- R: Toggle continuous random vehicle generation");
+    println!("- Esc: Exit and show statistics");
+
     while running {
         // Calculate frame time
         let now = Instant::now();
@@ -63,8 +72,6 @@ fn main() -> Result<(), String> {
             frame_time = 10; // Ensure a more reasonable minimum time delta
         }
 
-        println!("Frame time: {}ms", frame_time);
-
         // Handle events
         for event in event_pump.poll_iter() {
             match event {
@@ -73,17 +80,6 @@ fn main() -> Result<(), String> {
                 }
                 Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
                     running = false;
-                }
-                Event::KeyDown { keycode: Some(Keycode::R), .. } => {
-                    println!("R key pressed - toggling continuous spawn");
-                    game.handle_event(&event);
-                }
-                Event::KeyDown { keycode: Some(Keycode::Up), .. } |
-                Event::KeyDown { keycode: Some(Keycode::Down), .. } |
-                Event::KeyDown { keycode: Some(Keycode::Left), .. } |
-                Event::KeyDown { keycode: Some(Keycode::Right), .. } => {
-                    println!("Arrow key pressed - spawning vehicle");
-                    game.handle_event(&event);
                 }
                 _ => {
                     game.handle_event(&event);
@@ -101,8 +97,6 @@ fn main() -> Result<(), String> {
         if frame_time < FRAME_DELAY {
             std::thread::sleep(Duration::from_millis((FRAME_DELAY - frame_time) as u64));
         }
-
-        last_frame = Instant::now();
     }
 
     // Show statistics when game ends

@@ -6,6 +6,7 @@ use crate::vehicle::Direction;
 pub struct InputHandler {
     key_states: [bool; 4], // Up, Down, Left, Right
     continuous_spawn: bool,
+    last_direction: Option<Direction>,
 }
 
 impl InputHandler {
@@ -13,6 +14,7 @@ impl InputHandler {
         InputHandler {
             key_states: [false; 4],
             continuous_spawn: false,
+            last_direction: None,
         }
     }
 
@@ -28,18 +30,22 @@ impl InputHandler {
                 match keycode {
                     Keycode::Up => {
                         self.key_states[0] = true;
-                        Some(Direction::South) // Vehicles coming from South, moving North
+                        self.last_direction = Some(Direction::North);
+                        Some(Direction::North) // Vehicles coming from South, moving North
                     }
                     Keycode::Down => {
                         self.key_states[1] = true;
-                        Some(Direction::North) // Vehicles coming from North, moving South
+                        self.last_direction = Some(Direction::South);
+                        Some(Direction::South) // Vehicles coming from North, moving South
                     }
                     Keycode::Left => {
                         self.key_states[2] = true;
+                        self.last_direction = Some(Direction::East);
                         Some(Direction::East) // Vehicles coming from East, moving West
                     }
                     Keycode::Right => {
                         self.key_states[3] = true;
+                        self.last_direction = Some(Direction::West);
                         Some(Direction::West) // Vehicles coming from West, moving East
                     }
                     Keycode::R => {
@@ -66,6 +72,15 @@ impl InputHandler {
     // Check if continuous spawn is enabled
     pub fn is_continuous_spawn(&self) -> bool {
         self.continuous_spawn
+    }
+
+    // Get the last pressed direction or a random one if none
+    pub fn get_direction(&self) -> Direction {
+        if let Some(dir) = self.last_direction {
+            dir
+        } else {
+            self.get_random_direction()
+        }
     }
 
     // Get a random direction
