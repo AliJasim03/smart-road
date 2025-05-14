@@ -10,7 +10,8 @@ use crate::vehicle::{Direction, Route, Vehicle, VehicleColor};
 
 pub struct Renderer<'a> {
     vehicle_textures: Vec<sdl2::render::Texture<'a>>,
-    road_texture: Option<sdl2::render::Texture<'a>>,
+    road_right: Option<sdl2::render::Texture<'a>>,
+    road_up: Option<sdl2::render::Texture<'a>>,
     acera_texture: Option<sdl2::render::Texture<'a>>,
     texture_creator: &'a TextureCreator<WindowContext>,
 }
@@ -49,15 +50,28 @@ impl<'a> Renderer<'a> {
             }
         }
 
-        // Load road texture
-        let road_texture_result = texture_creator.load_texture("assets/road/road.png");
-        let road_texture = match road_texture_result {
+        // Load road textures for different orientations
+        let road_right_result = texture_creator.load_texture("assets/road/road_right.png");
+        let road_right = match road_right_result {
             Ok(texture) => {
-                println!("Successfully loaded road.png texture");
+                println!("Successfully loaded road_right.png texture");
                 Some(texture)
             }
             Err(e) => {
-                println!("Warning: Could not load road texture: {}", e);
+                println!("Warning: Could not load road_right texture: {}", e);
+                println!("Creating fallback road texture...");
+                Some(Self::create_road_texture(texture_creator)?)
+            }
+        };
+
+        let road_up_result = texture_creator.load_texture("assets/road/road_up.png");
+        let road_up = match road_up_result {
+            Ok(texture) => {
+                println!("Successfully loaded road_up.png texture");
+                Some(texture)
+            }
+            Err(e) => {
+                println!("Warning: Could not load road_up texture: {}", e);
                 println!("Creating fallback road texture...");
                 Some(Self::create_road_texture(texture_creator)?)
             }
@@ -79,7 +93,8 @@ impl<'a> Renderer<'a> {
 
         Ok(Renderer {
             vehicle_textures,
-            road_texture,
+            road_right,
+            road_up,
             acera_texture,
             texture_creator,
         })
@@ -293,29 +308,65 @@ impl<'a> Renderer<'a> {
             canvas.clear();
         }
 
-        // Draw the roads using road texture
-        if let Some(road_texture) = &self.road_texture {
-            let center = intersection_center();
-
-            // Horizontal road (east-west)
-            let horizontal_road = Rect::new(
+        // Draw the roads using oriented road textures
+        let center = intersection_center();
+        
+        // Draw horizontal road (east-west) using right-facing texture in two parts
+        if let Some(road_right) = &self.road_right {
+            // Left part of horizontal road
+            let left_width = (center.0 - (ROAD_WIDTH as i32 / 2)) as u32;
+            let horizontal_left = Rect::new(
                 0,
                 center.1 - (ROAD_WIDTH as i32 / 2),
-                crate::WINDOW_WIDTH,
+                left_width,
                 ROAD_WIDTH,
             );
+            canvas.copy(road_right, None, Some(horizontal_left))?;
 
-            // Vertical road (north-south)
-            let vertical_road = Rect::new(
+            // Right part of horizontal road
+            let right_start = center.0 + (ROAD_WIDTH as i32 / 2);
+            let right_width = (crate::WINDOW_WIDTH as i32 - right_start) as u32;
+            let horizontal_right = Rect::new(
+                center.0 + (ROAD_WIDTH as i32 / 2),
+                center.1 - (ROAD_WIDTH as i32 / 2),
+                right_width,
+                ROAD_WIDTH,
+            );
+            canvas.copy(road_right, None, Some(horizontal_right))?;
+        }
+
+        // Draw vertical road (north-south) using upward-facing texture in two parts
+        if let Some(road_up) = &self.road_up {
+            // Top part of vertical road
+            let top_height = (center.1 - (ROAD_WIDTH as i32 / 2)) as u32;
+            let vertical_top = Rect::new(
                 center.0 - (ROAD_WIDTH as i32 / 2),
                 0,
                 ROAD_WIDTH,
-                crate::WINDOW_HEIGHT,
+                top_height,
             );
+            canvas.copy(road_up, None, Some(vertical_top))?;
 
-            // Draw the roads
-            canvas.copy(road_texture, None, Some(horizontal_road))?;
-            canvas.copy(road_texture, None, Some(vertical_road))?;
+            // Bottom part of vertical road
+            let bottom_start = center.1 + (ROAD_WIDTH as i32 / 2);
+            let bottom_height = (crate::WINDOW_HEIGHT as i32 - bottom_start) as u32;
+            let vertical_bottom = Rect::new(
+                center.0 - (ROAD_WIDTH as i32 / 2),
+                center.1 + (ROAD_WIDTH as i32 / 2),
+                ROAD_WIDTH,
+                bottom_height,
+            );
+            canvas.copy(road_up, None, Some(vertical_bottom))?;
+
+            // Draw intersection area with darker color to create crossover effect
+            canvas.set_draw_color(Color::RGB(60, 60, 60)); // Darker gray for intersection
+            let intersection_area = Rect::new(
+                center.0 - (ROAD_WIDTH as i32 / 2),
+                center.1 - (ROAD_WIDTH as i32 / 2),
+                ROAD_WIDTH,
+                ROAD_WIDTH,
+            );
+            canvas.fill_rect(intersection_area)?;
         } else {
             // Fallback to simple gray roads
             canvas.set_draw_color(Color::RGB(80, 80, 80)); // Dark gray
