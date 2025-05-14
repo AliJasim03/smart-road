@@ -99,12 +99,19 @@ impl Vehicle {
         // Get a unique ID using the atomic counter
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
 
-        // Get lane position based on direction and lane index
+        // Determine appropriate lane based on route
+        let adjusted_lane = match route {
+            Route::Left => lane.min(1),      // Use lanes 0-1 for left turns
+            Route::Straight => 2 + lane % 2,  // Use lanes 2-3 for straight
+            Route::Right => 4 + lane % 2,     // Use lanes 4-5 for right turns
+        };
+
+        // Get lane position based on direction and adjusted lane index
         let lane_position = match direction {
-            Direction::North => crate::intersection::south_lanes()[lane],
-            Direction::South => crate::intersection::north_lanes()[lane],
-            Direction::East => crate::intersection::west_lanes()[lane],
-            Direction::West => crate::intersection::east_lanes()[lane],
+            Direction::North => crate::intersection::south_lanes()[adjusted_lane],
+            Direction::South => crate::intersection::north_lanes()[adjusted_lane],
+            Direction::East => crate::intersection::west_lanes()[adjusted_lane],
+            Direction::West => crate::intersection::east_lanes()[adjusted_lane],
         };
 
         // Set initial position based on direction and lane
@@ -118,12 +125,12 @@ impl Vehicle {
         // Create the Point for rendering
         let position = Point::new(pos_x as i32, pos_y as i32);
 
-        // Set initial angle based on direction
+        // Set initial angle based on direction (corrected to face the proper way)
         let angle = match direction {
             Direction::North => 0.0,   // Facing up
             Direction::South => 180.0, // Facing down
-            Direction::East => 270.0,  // Facing left
-            Direction::West => 90.0,   // Facing right
+            Direction::East => 90.0,   // Facing right
+            Direction::West => 270.0,  // Facing left
         };
 
         // Choose a random velocity level
@@ -371,40 +378,44 @@ impl Vehicle {
             (Direction::North, Route::Left) => {
                 let start_x = center_x - lane_offset;
                 let start_y = center_y - LANE_WIDTH as f64;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x - LANE_WIDTH as f64, start_y - LANE_WIDTH as f64),
-                    end_point: (start_x - 3.0 * LANE_WIDTH as f64, center_y),
+                    control_point: (start_x - turn_radius, start_y),
+                    end_point: (start_x - 2.0 * turn_radius, center_y - lane_offset),
                     progress: 0.0,
                 });
             }
             (Direction::South, Route::Left) => {
                 let start_x = center_x + lane_offset;
                 let start_y = center_y + LANE_WIDTH as f64;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x + LANE_WIDTH as f64, start_y + LANE_WIDTH as f64),
-                    end_point: (start_x + 3.0 * LANE_WIDTH as f64, center_y),
+                    control_point: (start_x + turn_radius, start_y),
+                    end_point: (start_x + 2.0 * turn_radius, center_y + lane_offset),
                     progress: 0.0,
                 });
             }
             (Direction::East, Route::Left) => {
                 let start_x = center_x + LANE_WIDTH as f64;
                 let start_y = center_y - lane_offset;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x + LANE_WIDTH as f64, start_y - LANE_WIDTH as f64),
-                    end_point: (center_x, start_y - 3.0 * LANE_WIDTH as f64),
+                    control_point: (start_x, start_y - turn_radius),
+                    end_point: (center_x + lane_offset, start_y - 2.0 * turn_radius),
                     progress: 0.0,
                 });
             }
             (Direction::West, Route::Left) => {
                 let start_x = center_x - LANE_WIDTH as f64;
                 let start_y = center_y + lane_offset;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x - LANE_WIDTH as f64, start_y + LANE_WIDTH as f64),
-                    end_point: (center_x, start_y + 3.0 * LANE_WIDTH as f64),
+                    control_point: (start_x, start_y + turn_radius),
+                    end_point: (center_x - lane_offset, start_y + 2.0 * turn_radius),
                     progress: 0.0,
                 });
             }
@@ -413,40 +424,44 @@ impl Vehicle {
             (Direction::North, Route::Right) => {
                 let start_x = center_x - lane_offset;
                 let start_y = center_y - LANE_WIDTH as f64;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x, start_y - LANE_WIDTH as f64),
-                    end_point: (center_x, start_y - 3.0 * LANE_WIDTH as f64),
+                    control_point: (start_x + turn_radius, start_y),
+                    end_point: (start_x + 2.0 * turn_radius, center_y - lane_offset),
                     progress: 0.0,
                 });
             }
             (Direction::South, Route::Right) => {
                 let start_x = center_x + lane_offset;
                 let start_y = center_y + LANE_WIDTH as f64;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x, start_y + LANE_WIDTH as f64),
-                    end_point: (center_x, start_y + 3.0 * LANE_WIDTH as f64),
+                    control_point: (start_x - turn_radius, start_y),
+                    end_point: (start_x - 2.0 * turn_radius, center_y + lane_offset),
                     progress: 0.0,
                 });
             }
             (Direction::East, Route::Right) => {
                 let start_x = center_x + LANE_WIDTH as f64;
                 let start_y = center_y - lane_offset;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x + LANE_WIDTH as f64, start_y),
-                    end_point: (start_x + 3.0 * LANE_WIDTH as f64, center_y),
+                    control_point: (start_x, start_y + turn_radius),
+                    end_point: (center_x + lane_offset, start_y + 2.0 * turn_radius),
                     progress: 0.0,
                 });
             }
             (Direction::West, Route::Right) => {
                 let start_x = center_x - LANE_WIDTH as f64;
                 let start_y = center_y + lane_offset;
+                let turn_radius = 2.0 * LANE_WIDTH as f64;
                 self.turning_path = Some(TurningPath {
                     start_point: (start_x, start_y),
-                    control_point: (start_x - LANE_WIDTH as f64, start_y),
-                    end_point: (start_x - 3.0 * LANE_WIDTH as f64, center_y),
+                    control_point: (start_x, start_y - turn_radius),
+                    end_point: (center_x - lane_offset, start_y - 2.0 * turn_radius),
                     progress: 0.0,
                 });
             }
