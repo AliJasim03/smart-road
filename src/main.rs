@@ -1,3 +1,4 @@
+// src/main.rs - Updated to use smart intersection algorithm
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use std::time::{Duration, Instant};
@@ -5,13 +6,13 @@ use std::time::{Duration, Instant};
 mod game;
 mod intersection;
 mod vehicle;
-mod renderer;
-mod input;
-mod algorithm;
+mod simple_renderer; // Simple block-based renderer
 mod statistics;
+mod smart_algorithm;
+// New smart algorithm module
 
-pub const WINDOW_WIDTH: u32 = 1024; // Increased to better show 6 lanes
-pub const WINDOW_HEIGHT: u32 = 768; // Increased to better show 6 lanes
+pub const WINDOW_WIDTH: u32 = 1024;
+pub const WINDOW_HEIGHT: u32 = 768;
 const FPS: u32 = 60;
 const FRAME_DELAY: u32 = 1000 / FPS;
 
@@ -22,7 +23,7 @@ fn main() -> Result<(), String> {
 
     // Create window
     let window = video_subsystem
-        .window("Smart Road Simulation (6-Lane Intersection)", WINDOW_WIDTH, WINDOW_HEIGHT)
+        .window("Smart Road Simulation - Intelligent Intersection", WINDOW_WIDTH, WINDOW_HEIGHT)
         .position_centered()
         .build()
         .map_err(|e| e.to_string())?;
@@ -38,10 +39,10 @@ fn main() -> Result<(), String> {
     // Get texture creator from canvas
     let texture_creator = canvas.texture_creator();
 
-    // Create renderer with texture creator
-    let renderer = renderer::Renderer::new(&texture_creator)?;
+    // Create simple block-based renderer with texture creator
+    let renderer = simple_renderer::SimpleRenderer::new(&texture_creator)?;
 
-    // Initialize game
+    // Initialize game with smart algorithm
     let mut game = game::Game::new(canvas, renderer)?;
 
     // Initialize event pump
@@ -52,24 +53,37 @@ fn main() -> Result<(), String> {
     let mut frame_time;
     let mut last_frame = Instant::now();
 
-    println!("Smart Road Simulation started");
+    println!("Smart Road Simulation with Intelligent Intersection Management");
+    println!("===============================================================");
     println!("Controls:");
-    println!("- Arrow Up: Generate vehicles from south");
-    println!("- Arrow Down: Generate vehicles from north");
-    println!("- Arrow Left: Generate vehicles from east");
-    println!("- Arrow Right: Generate vehicles from west");
+    println!("- Arrow Up: Generate vehicles from south (moving north)");
+    println!("- Arrow Down: Generate vehicles from north (moving south)");
+    println!("- Arrow Left: Generate vehicles from east (moving west)");
+    println!("- Arrow Right: Generate vehicles from west (moving east)");
     println!("- R: Toggle continuous random vehicle generation");
-    println!("- Esc: Exit and show statistics");
+    println!("- D: Toggle debug mode (shows vehicle states)");
+    println!("- G: Toggle grid overlay (shows 32x32 calculation grid)");
+    println!("- Space: Show current statistics");
+    println!("- Esc: Exit and show final statistics");
+    println!();
+    println!("Features:");
+    println!("- Reservation-based intersection management");
+    println!("- Priority system for traffic flow");
+    println!("- Collision-free intersection traversal");
+    println!("- Realistic vehicle physics and movement");
+    println!("- 32x32 pixel grid-based calculations");
+    println!();
 
     while running {
         // Calculate frame time
         let now = Instant::now();
-        frame_time = now.duration_since(last_frame).as_millis() as u32;
+        frame_time = now.duration_since(last_frame).as_millis() as f32 / 1000.0; // Convert to seconds
         last_frame = now;
 
-        // Make sure frame_time is never zero or too small
-        if frame_time < 10 {
-            frame_time = 10; // Ensure a more reasonable minimum time delta
+        // Ensure reasonable frame time bounds
+        frame_time = frame_time.min(1.0 / 30.0); // Cap at 30 FPS minimum
+        if frame_time < 0.001 {
+            frame_time = 1.0 / 60.0; // Default to 60 FPS
         }
 
         // Handle events
@@ -91,16 +105,23 @@ fn main() -> Result<(), String> {
         game.update(frame_time);
 
         // Render
-        game.render()?;
+        if let Err(e) = game.render() {
+            eprintln!("Rendering error: {}", e);
+        }
 
         // Cap the frame rate
-        if frame_time < FRAME_DELAY {
-            std::thread::sleep(Duration::from_millis((FRAME_DELAY - frame_time) as u64));
+        let elapsed = now.elapsed().as_millis() as u32;
+        if elapsed < FRAME_DELAY {
+            std::thread::sleep(Duration::from_millis((FRAME_DELAY - elapsed) as u64));
         }
     }
 
+    println!("\nSimulation ended. Showing final statistics...");
+
     // Show statistics when game ends
-    game.show_statistics()?;
+    if let Err(e) = game.show_statistics() {
+        eprintln!("Error showing statistics: {}", e);
+    }
 
     Ok(())
 }
