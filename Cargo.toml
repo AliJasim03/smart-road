@@ -1,11 +1,29 @@
 [package]
 name = "smart_road"
 version = "0.1.0"
-edition = "2024"
-links = "SDL2 SDL2_image SDL2_ttf"
+edition = "2021"
+authors = ["Smart Road Team"]
+description = "Smart road intersection simulation with autonomous vehicles"
+license = "MIT"
 
 [dependencies]
 sdl2 = { version = "0.35.2", features = ["image", "ttf"] }
 rand = "0.8.5"
 
 [build-dependencies]
+
+[profile.dev]
+opt-level = 1
+debug = true
+incremental = true
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[[bin]]
+name = "smart_road"
+path = "src/main.rs"

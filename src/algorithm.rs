@@ -89,10 +89,11 @@ impl SmartIntersection {
             }
         }
 
-        // Debug print of congestion levels
-        println!("Direction congestion: {:?}", direction_congestion);
-        println!("Direction priority: {:?}", self.direction_priority);
-        println!("Adaptive mode: {}", self.adaptive_mode);
+        // Debug output (optional, can be removed for performance)
+        if direction_congestion.iter().any(|&count| count > 5) {
+            println!("Direction congestion: {:?}", direction_congestion);
+            println!("Adaptive mode: {}", self.adaptive_mode);
+        }
     }
 
     // Adjust vehicle velocities to avoid collisions

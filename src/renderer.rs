@@ -23,29 +23,41 @@ impl<'a> Renderer<'a> {
 
         println!("Current working directory: {:?}", std::env::current_dir().unwrap_or_default());
 
-        // Load vehicle texture
         let mut vehicle_textures = Vec::new();
-        let car_texture_result = texture_creator.load_texture("assets/vehicles/cars.png");
-        match car_texture_result {
-            Ok(texture) => {
-                println!("Successfully loaded cars.png texture");
-                vehicle_textures.push(texture);
+
+        // First try to create optimized sprite sheet
+        match Self::create_optimized_sprite_sheet(texture_creator) {
+            Ok(sprite_sheet) => {
+                println!("Successfully created optimized car sprite sheet");
+                vehicle_textures.push(sprite_sheet);
             }
             Err(e) => {
-                println!("Warning: Could not load cars.png texture: {}", e);
-                println!("Creating fallback vehicle textures...");
+                println!("Sprite sheet creation failed: {}, trying to load from file...", e);
 
-                // Create 4 different colored vehicles for the 4 different routes
-                let colors = [
-                    Color::RGB(255, 50, 50),    // Red for Left turn
-                    Color::RGB(50, 50, 255),    // Blue for Straight
-                    Color::RGB(50, 200, 50),    // Green for Right turn
-                    Color::RGB(255, 255, 50),   // Yellow for special cases
-                ];
+                // Try to load from file
+                let car_texture_result = texture_creator.load_texture("assets/vehicles/cars.png");
+                match car_texture_result {
+                    Ok(texture) => {
+                        println!("Successfully loaded cars.png texture");
+                        vehicle_textures.push(texture);
+                    }
+                    Err(e) => {
+                        println!("Warning: Could not load cars.png texture: {}", e);
+                        println!("Creating fallback vehicle textures...");
 
-                for color in colors {
-                    let texture = Self::create_vehicle_texture(texture_creator, color)?;
-                    vehicle_textures.push(texture);
+                        // Create 4 different colored vehicles for the 4 different routes
+                        let colors = [
+                            Color::RGB(220, 50, 50),    // Red for Left turn
+                            Color::RGB(50, 50, 220),    // Blue for Straight
+                            Color::RGB(50, 220, 50),    // Green for Right turn
+                            Color::RGB(220, 220, 50),   // Yellow for special cases
+                        ];
+
+                        for color in colors {
+                            let texture = Self::create_vehicle_texture(texture_creator, color)?;
+                            vehicle_textures.push(texture);
+                        }
+                    }
                 }
             }
         }
@@ -100,6 +112,133 @@ impl<'a> Renderer<'a> {
         })
     }
 
+    // Create optimized sprite sheet with 2x2 car layout
+    fn create_optimized_sprite_sheet(
+        texture_creator: &TextureCreator<WindowContext>
+    ) -> Result<sdl2::render::Texture, String> {
+        // Create a 2x2 sprite sheet (160x160 total, 80x80 per car)
+        let sprite_width = 160;
+        let sprite_height = 160;
+        let car_width = 80;
+        let car_height = 80;
+
+        let mut surface = Surface::new(
+            sprite_width,
+            sprite_height,
+            sdl2::pixels::PixelFormatEnum::RGBA8888,
+        ).map_err(|e| e.to_string())?;
+
+        // Make background transparent
+        surface.set_color_key(true, Color::RGB(255, 0, 255)).map_err(|e| e.to_string())?;
+        surface.fill_rect(None, Color::RGB(255, 0, 255)).map_err(|e| e.to_string())?;
+
+        // Car colors for each quarter
+        let colors = [
+            Color::RGB(220, 50, 50),   // Red (top-left) - Left turn
+            Color::RGB(50, 50, 220),   // Blue (top-right) - Straight
+            Color::RGB(50, 220, 50),   // Green (bottom-left) - Right turn
+            Color::RGB(220, 220, 50),  // Yellow (bottom-right) - Special
+        ];
+
+        // Create 4 cars in 2x2 grid
+        for (i, color) in colors.iter().enumerate() {
+            let col = i % 2;
+            let row = i / 2;
+            let x_offset = (col * car_width as usize) as i32;
+            let y_offset = (row * car_height as usize) as i32;
+
+            // Create car in this quarter
+            Self::create_detailed_car(&mut surface, x_offset, y_offset, car_width, car_height, *color)?;
+        }
+
+        // Create texture from surface
+        texture_creator
+            .create_texture_from_surface(surface)
+            .map_err(|e| e.to_string())
+    }
+
+    // Create detailed car sprite
+    fn create_detailed_car(
+        surface: &mut Surface,
+        x_offset: i32,
+        y_offset: i32,
+        width: u32,
+        height: u32,
+        base_color: Color,
+    ) -> Result<(), String> {
+
+        // Car body (main rectangle)
+        surface.fill_rect(
+            Rect::new(x_offset + 10, y_offset + 5, width - 20, height - 10),
+            base_color,
+        ).map_err(|e| e.to_string())?;
+
+        // Car roof/cabin (lighter color)
+        let roof_color = Color::RGB(
+            base_color.r.saturating_add(30).min(255),
+            base_color.g.saturating_add(30).min(255),
+            base_color.b.saturating_add(30).min(255),
+        );
+
+        surface.fill_rect(
+            Rect::new(x_offset + 15, y_offset + 15, width - 30, height - 40),
+            roof_color,
+        ).map_err(|e| e.to_string())?;
+
+        // Windows (light blue)
+        surface.fill_rect(
+            Rect::new(x_offset + 20, y_offset + 18, width - 40, height - 46),
+            Color::RGB(150, 200, 255),
+        ).map_err(|e| e.to_string())?;
+
+        // Front bumper/grille
+        surface.fill_rect(
+            Rect::new(x_offset + 12, y_offset + 8, width - 24, 8),
+            Color::RGB(60, 60, 60),
+        ).map_err(|e| e.to_string())?;
+
+        // Rear bumper
+        surface.fill_rect(
+            Rect::new(x_offset + 12, y_offset + (height as i32) - 16, width - 24, 8),
+            Color::RGB(60, 60, 60),
+        ).map_err(|e| e.to_string())?;
+
+        // Headlights (front)
+        surface.fill_rect(
+            Rect::new(x_offset + 18, y_offset + 10, 8, 6),
+            Color::RGB(255, 255, 200),
+        ).map_err(|e| e.to_string())?;
+
+        surface.fill_rect(
+            Rect::new(x_offset + (width as i32) - 26, y_offset + 10, 8, 6),
+            Color::RGB(255, 255, 200),
+        ).map_err(|e| e.to_string())?;
+
+        // Taillights (rear)
+        surface.fill_rect(
+            Rect::new(x_offset + 18, y_offset + (height as i32) - 16, 8, 6),
+            Color::RGB(255, 50, 50),
+        ).map_err(|e| e.to_string())?;
+
+        surface.fill_rect(
+            Rect::new(x_offset + (width as i32) - 26, y_offset + (height as i32) - 16, 8, 6),
+            Color::RGB(255, 50, 50),
+        ).map_err(|e| e.to_string())?;
+
+        // Side mirrors
+        surface.fill_rect(
+            Rect::new(x_offset + 8, y_offset + 25, 4, 6),
+            Color::RGB(100, 100, 100),
+        ).map_err(|e| e.to_string())?;
+
+        surface.fill_rect(
+            Rect::new(x_offset + (width as i32) - 12, y_offset + 25, 4, 6),
+            Color::RGB(100, 100, 100),
+        ).map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+
     // Enhanced create_vehicle_texture method with more detailed car appearance
     fn create_vehicle_texture(
         texture_creator: &TextureCreator<WindowContext>,
@@ -125,7 +264,7 @@ impl<'a> Renderer<'a> {
         // Car roof/cabin
         surface
             .fill_rect(
-                Rect::new(5, 15, Vehicle::WIDTH - 10, Vehicle::HEIGHT - 40),
+                Rect::new(3, 8, Vehicle::WIDTH - 6, Vehicle::HEIGHT - 16),
                 Color::RGB(220, 220, 255),
             )
             .map_err(|e| e.to_string())?;
@@ -133,51 +272,35 @@ impl<'a> Renderer<'a> {
         // Car windows
         surface
             .fill_rect(
-                Rect::new(8, 18, Vehicle::WIDTH - 16, Vehicle::HEIGHT - 46),
+                Rect::new(5, 10, Vehicle::WIDTH - 10, Vehicle::HEIGHT - 20),
                 Color::RGB(100, 180, 255),
             )
             .map_err(|e| e.to_string())?;
 
-        // Front windshield
+        // Front lights
         surface
             .fill_rect(
-                Rect::new(8, 18, Vehicle::WIDTH - 16, 12),
-                Color::RGB(120, 200, 255),
-            )
-            .map_err(|e| e.to_string())?;
-
-        // Back windshield - Fixed: Converting u32 to i32
-        surface
-            .fill_rect(
-                Rect::new(8, (Vehicle::HEIGHT - 30) as i32, Vehicle::WIDTH - 16, 12),
-                Color::RGB(120, 200, 255),
-            )
-            .map_err(|e| e.to_string())?;
-
-        // Front headlights
-        surface
-            .fill_rect(
-                Rect::new(5, 5, 8, 8),
+                Rect::new(3, 3, 6, 4),
                 Color::RGB(255, 255, 200),
             )
             .map_err(|e| e.to_string())?;
         surface
             .fill_rect(
-                Rect::new((Vehicle::WIDTH as i32) - 13, 5, 8, 8),
+                Rect::new((Vehicle::WIDTH as i32) - 9, 3, 6, 4),
                 Color::RGB(255, 255, 200),
             )
             .map_err(|e| e.to_string())?;
 
-        // Rear lights - Fixed: Converting u32 to i32
+        // Rear lights
         surface
             .fill_rect(
-                Rect::new(5, (Vehicle::HEIGHT as i32) - 13, 8, 8),
+                Rect::new(3, (Vehicle::HEIGHT as i32) - 7, 6, 4),
                 Color::RGB(255, 50, 50),
             )
             .map_err(|e| e.to_string())?;
         surface
             .fill_rect(
-                Rect::new((Vehicle::WIDTH as i32) - 13, (Vehicle::HEIGHT as i32) - 13, 8, 8),
+                Rect::new((Vehicle::WIDTH as i32) - 9, (Vehicle::HEIGHT as i32) - 7, 6, 4),
                 Color::RGB(255, 50, 50),
             )
             .map_err(|e| e.to_string())?;
@@ -310,7 +433,7 @@ impl<'a> Renderer<'a> {
 
         // Draw the roads using oriented road textures
         let center = intersection_center();
-        
+
         // Draw horizontal road (east-west) using right-facing texture in two parts
         if let Some(road_right) = &self.road_right {
             // Left part of horizontal road
@@ -424,7 +547,7 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    // Render a vehicle
+    // FIXED: Render a vehicle with proper sprite sheet handling
     pub fn render_vehicle(
         &mut self,
         canvas: &mut Canvas<Window>,
@@ -440,38 +563,22 @@ impl<'a> Renderer<'a> {
 
         // If we have vehicle textures
         if !self.vehicle_textures.is_empty() {
-            // Get the appropriate texture based on the vehicle's color/route
-            let texture_index = if self.vehicle_textures.len() > 1 {
-                // If we have multiple textures, select based on color
-                match vehicle.color {
-                    VehicleColor::Red => 0,
-                    VehicleColor::Blue => 1,
-                    VehicleColor::Green => 2,
-                    VehicleColor::Yellow => 3 % self.vehicle_textures.len(),
-                }
-            } else {
-                // If we only have one texture, use it
-                0
-            };
+            let texture = &self.vehicle_textures[0]; // Use first texture
+            let texture_query = texture.query();
 
-            let texture = &self.vehicle_textures[texture_index];
+            // FIXED: Check if this is a sprite sheet (larger than single vehicle)
+            let src_rect = if texture_query.width > Vehicle::WIDTH && texture_query.height > Vehicle::HEIGHT {
+                // Handle 2x2 sprite sheet (4 cars in quarters)
+                let car_width = texture_query.width / 2;  // 80 pixels
+                let car_height = texture_query.height / 2; // 80 pixels
 
-            // Source rectangle for the car in the texture
-            let src_rect = if self.vehicle_textures.len() == 1 && texture.query().width > Vehicle::WIDTH {
-                // If we loaded a sprite sheet, use part of it
-                // Our cars.png has 4 cars in a 2x2 grid
-                let car_width = texture.query().width / 2;  // Assuming 2 columns
-                let car_height = texture.query().height / 2; // Assuming 2 rows
-
-                let color_index = match vehicle.color {
-                    VehicleColor::Red => 0,    // Top-left
-                    VehicleColor::Blue => 1,   // Top-right
-                    VehicleColor::Green => 2,  // Bottom-left
-                    VehicleColor::Yellow => 3, // Bottom-right
+                // FIXED: Map vehicle color to correct sprite position
+                let (col, row) = match vehicle.color {
+                    VehicleColor::Red => (0, 0),    // Top-left - Left turn
+                    VehicleColor::Blue => (1, 0),   // Top-right - Straight
+                    VehicleColor::Green => (0, 1),  // Bottom-left - Right turn
+                    VehicleColor::Yellow => (1, 1), // Bottom-right - Special
                 };
-
-                let col = color_index % 2;
-                let row = color_index / 2;
 
                 Some(Rect::new(
                     (col * car_width) as i32,
@@ -480,13 +587,32 @@ impl<'a> Renderer<'a> {
                     car_height
                 ))
             } else {
-                // Use the entire texture
-                None
+                // Use different textures for different colors if available
+                let texture_index = match vehicle.color {
+                    VehicleColor::Red => 0,
+                    VehicleColor::Blue => 1.min(self.vehicle_textures.len() - 1),
+                    VehicleColor::Green => 2.min(self.vehicle_textures.len() - 1),
+                    VehicleColor::Yellow => 3.min(self.vehicle_textures.len() - 1),
+                };
+                None // Use entire texture
             };
 
-            // Render the vehicle texture
+            // Select the appropriate texture
+            let selected_texture = if src_rect.is_some() {
+                &self.vehicle_textures[0] // Use sprite sheet
+            } else {
+                let texture_index = match vehicle.color {
+                    VehicleColor::Red => 0,
+                    VehicleColor::Blue => 1.min(self.vehicle_textures.len() - 1),
+                    VehicleColor::Green => 2.min(self.vehicle_textures.len() - 1),
+                    VehicleColor::Yellow => 3.min(self.vehicle_textures.len() - 1),
+                };
+                &self.vehicle_textures[texture_index]
+            };
+
+            // Render the vehicle texture with proper rotation
             canvas.copy_ex(
-                texture,
+                selected_texture,
                 src_rect,
                 render_rect,
                 vehicle.angle, // rotation angle in degrees
@@ -507,6 +633,10 @@ impl<'a> Renderer<'a> {
             };
             canvas.set_draw_color(color);
             canvas.fill_rect(render_rect)?;
+
+            // Add a border to make it look more like a car
+            canvas.set_draw_color(Color::RGB(0, 0, 0));
+            canvas.draw_rect(render_rect)?;
         }
 
         Ok(())

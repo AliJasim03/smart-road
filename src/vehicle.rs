@@ -40,8 +40,8 @@ pub enum VelocityLevel {
 #[derive(Debug, Clone, Copy)]
 pub enum VehicleColor {
     Red,    // Left turn
-    Green,  // Straight
-    Blue,   // Right turn
+    Blue,   // Straight
+    Green,  // Right turn
     Yellow, // Special case
 }
 
@@ -86,14 +86,15 @@ pub struct Vehicle {
 }
 
 impl Vehicle {
-    pub const SLOW_VELOCITY: f64 = 50.0; // pixels per second
-    pub const MEDIUM_VELOCITY: f64 = 100.0;
-    pub const FAST_VELOCITY: f64 = 150.0;
-    pub const SAFE_DISTANCE: f64 = 50.0; // pixels
+    // FIXED: Updated velocity constants for better visibility and control
+    pub const SLOW_VELOCITY: f64 = 40.0;   // pixels per second - slower for better control
+    pub const MEDIUM_VELOCITY: f64 = 80.0; // pixels per second - medium speed
+    pub const FAST_VELOCITY: f64 = 120.0;  // pixels per second - fast but manageable
+    pub const SAFE_DISTANCE: f64 = 60.0;   // pixels - larger safe distance
 
-    // Vehicle dimensions
-    pub const WIDTH: u32 = 40;
-    pub const HEIGHT: u32 = 80;
+    // FIXED: Vehicle dimensions - smaller and square for better rendering
+    pub const WIDTH: u32 = 32;  // Smaller width for better visibility
+    pub const HEIGHT: u32 = 32; // Square for easier rotation
 
     pub fn new(direction: Direction, lane: usize, route: Route) -> Self {
         // Get a unique ID using the atomic counter
@@ -108,24 +109,37 @@ impl Vehicle {
 
         // Get lane position based on direction and adjusted lane index
         let lane_position = match direction {
-            Direction::North => crate::intersection::south_lanes()[adjusted_lane],
-            Direction::South => crate::intersection::north_lanes()[adjusted_lane],
-            Direction::East => crate::intersection::west_lanes()[adjusted_lane],
-            Direction::West => crate::intersection::east_lanes()[adjusted_lane],
+            Direction::North => crate::intersection::south_lanes()[adjusted_lane.min(5)],
+            Direction::South => crate::intersection::north_lanes()[adjusted_lane.min(5)],
+            Direction::East => crate::intersection::west_lanes()[adjusted_lane.min(5)],
+            Direction::West => crate::intersection::east_lanes()[adjusted_lane.min(5)],
         };
 
-        // Set initial position based on direction and lane
+        // FIXED: Set spawn position outside screen boundaries with proper offset
+        let spawn_offset = 100.0; // Distance from screen edge
         let (pos_x, pos_y) = match direction {
-            Direction::North => (lane_position as f64, crate::WINDOW_HEIGHT as f64),
-            Direction::South => (lane_position as f64, 0.0),
-            Direction::East => (0.0, lane_position as f64),
-            Direction::West => (crate::WINDOW_WIDTH as f64, lane_position as f64),
+            Direction::North => (
+                lane_position as f64,
+                crate::WINDOW_HEIGHT as f64 + spawn_offset
+            ),
+            Direction::South => (
+                lane_position as f64,
+                -spawn_offset
+            ),
+            Direction::East => (
+                -spawn_offset,
+                lane_position as f64
+            ),
+            Direction::West => (
+                crate::WINDOW_WIDTH as f64 + spawn_offset,
+                lane_position as f64
+            ),
         };
 
         // Create the Point for rendering
         let position = Point::new(pos_x as i32, pos_y as i32);
 
-        // Set initial angle based on direction (corrected to face the proper way)
+        // Set initial angle based on direction
         let angle = match direction {
             Direction::North => 0.0,   // Facing up
             Direction::South => 180.0, // Facing down
@@ -133,13 +147,13 @@ impl Vehicle {
             Direction::West => 270.0,  // Facing left
         };
 
-        // Choose a random velocity level
+        // FIXED: Choose velocity level with better distribution
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        let velocity_level = match rng.gen_range(0..3) {
-            0 => VelocityLevel::Slow,
-            1 => VelocityLevel::Medium,
-            _ => VelocityLevel::Fast,
+        let velocity_level = match rng.gen_range(0..10) {
+            0..=2 => VelocityLevel::Slow,    // 30% slow
+            3..=6 => VelocityLevel::Medium,  // 40% medium
+            _ => VelocityLevel::Fast,        // 30% fast
         };
 
         let initial_velocity = match velocity_level {
@@ -148,21 +162,21 @@ impl Vehicle {
             VelocityLevel::Fast => Self::FAST_VELOCITY,
         };
 
-        // Set color based on route
+        // Set color based on route with better visibility
         let color = match route {
             Route::Left => VehicleColor::Red,
             Route::Straight => VehicleColor::Blue,
             Route::Right => VehicleColor::Green,
         };
 
-        // Initialize physics properties with slight randomization for variety
+        // Initialize physics with more realistic values
         let physics = VehiclePhysics {
-            max_acceleration: rng.gen_range(25.0..35.0),  // pixels/second²
-            max_deceleration: rng.gen_range(50.0..70.0),  // braking is stronger than acceleration
+            max_acceleration: rng.gen_range(30.0..50.0),
+            max_deceleration: rng.gen_range(60.0..80.0),
             current_acceleration: 0.0,
-            mass: rng.gen_range(800.0..2000.0),  // kg (affects acceleration)
-            drag_coefficient: rng.gen_range(0.25..0.35), // Air resistance factor
-            engine_power: rng.gen_range(90.0..110.0),    // Power factor (percentage of efficiency)
+            mass: rng.gen_range(1000.0..2000.0),
+            drag_coefficient: rng.gen_range(0.2..0.4),
+            engine_power: rng.gen_range(85.0..115.0),
         };
 
         Vehicle {
@@ -170,7 +184,7 @@ impl Vehicle {
             position,
             position_f: (pos_x, pos_y),
             direction,
-            lane,
+            lane: adjusted_lane,
             route,
             state: VehicleState::Approaching,
             velocity_level,
@@ -483,13 +497,14 @@ impl Vehicle {
         }
     }
 
-    // Check if vehicle has left the intersection area
+    // FIXED: Check if vehicle has left the intersection area
     pub fn has_left_intersection(&self, intersection: &Intersection) -> bool {
+        // Check if vehicle has completely left the screen
         match self.get_exit_direction() {
-            Direction::North => self.position.y <= intersection.north_exit,
-            Direction::South => self.position.y >= intersection.south_exit,
-            Direction::East => self.position.x >= intersection.east_exit,
-            Direction::West => self.position.x <= intersection.west_exit,
+            Direction::North => self.position.y < -100,
+            Direction::South => self.position.y > (crate::WINDOW_HEIGHT as i32 + 100),
+            Direction::East => self.position.x > (crate::WINDOW_WIDTH as i32 + 100),
+            Direction::West => self.position.x < -100,
         }
     }
 
@@ -633,5 +648,13 @@ impl Vehicle {
         } else {
             f64::MAX // Avoid division by zero
         }
+    }
+
+    // FIXED: Add method to check if vehicle is on screen
+    pub fn is_on_screen(&self) -> bool {
+        self.position.x >= -50 &&
+            self.position.x <= (crate::WINDOW_WIDTH as i32 + 50) &&
+            self.position.y >= -50 &&
+            self.position.y <= (crate::WINDOW_HEIGHT as i32 + 50)
     }
 }

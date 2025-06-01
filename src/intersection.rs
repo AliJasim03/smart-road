@@ -73,6 +73,7 @@ pub fn lane_route(lane_index: usize) -> LaneRoute {
 }
 
 // Define the paths for each route through the intersection
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Path {
     NorthToEast, // North incoming, turning right to East
     NorthToSouth, // North incoming, going straight to South
@@ -122,7 +123,7 @@ impl Intersection {
         use Path::*;
 
         match (path1, path2) {
-            // Straight paths crossing
+            // Straight paths crossing each other
             (NorthToSouth, EastToWest) | (EastToWest, NorthToSouth) => true,
             (NorthToSouth, WestToEast) | (WestToEast, NorthToSouth) => true,
             (SouthToNorth, EastToWest) | (EastToWest, SouthToNorth) => true,
@@ -144,7 +145,39 @@ impl Intersection {
             (EastToNorth, SouthToWest) | (SouthToWest, EastToNorth) => true,
             (WestToSouth, NorthToEast) | (NorthToEast, WestToSouth) => true,
 
-            // Other combinations don't collide
+            // Right turns crossing straight paths
+            (NorthToEast, WestToEast) | (WestToEast, NorthToEast) => true,
+            (SouthToWest, EastToWest) | (EastToWest, SouthToWest) => true,
+            (EastToSouth, NorthToSouth) | (NorthToSouth, EastToSouth) => true,
+            (WestToNorth, SouthToNorth) | (SouthToNorth, WestToNorth) => true,
+
+            // Same direction vehicles (shouldn't collide in normal circumstances)
+            (NorthToEast, NorthToSouth) | (NorthToSouth, NorthToEast) => false,
+            (NorthToEast, NorthToWest) | (NorthToWest, NorthToEast) => false,
+            (NorthToSouth, NorthToWest) | (NorthToWest, NorthToSouth) => false,
+
+            // Similar analysis for other same-direction combinations
+            (SouthToWest, SouthToNorth) | (SouthToNorth, SouthToWest) => false,
+            (SouthToWest, SouthToEast) | (SouthToEast, SouthToWest) => false,
+            (SouthToNorth, SouthToEast) | (SouthToEast, SouthToNorth) => false,
+
+            (EastToSouth, EastToWest) | (EastToWest, EastToSouth) => false,
+            (EastToSouth, EastToNorth) | (EastToNorth, EastToSouth) => false,
+            (EastToWest, EastToNorth) | (EastToNorth, EastToWest) => false,
+
+            (WestToNorth, WestToEast) | (WestToEast, WestToNorth) => false,
+            (WestToNorth, WestToSouth) | (WestToSouth, WestToNorth) => false,
+            (WestToEast, WestToSouth) | (WestToSouth, WestToEast) => false,
+
+            // Parallel paths (shouldn't collide)
+            (NorthToSouth, SouthToNorth) | (SouthToNorth, NorthToSouth) => false,
+            (EastToWest, WestToEast) | (WestToEast, EastToWest) => false,
+
+            // Right turns that don't intersect
+            (NorthToEast, SouthToWest) | (SouthToWest, NorthToEast) => false,
+            (EastToSouth, WestToNorth) | (WestToNorth, EastToSouth) => false,
+
+            // Other combinations that don't conflict
             _ => false,
         }
     }
@@ -166,6 +199,82 @@ impl Intersection {
             (Direction::West, Route::Right) => Path::WestToNorth,
             (Direction::West, Route::Straight) => Path::WestToEast,
             (Direction::West, Route::Left) => Path::WestToSouth,
+        }
+    }
+
+    // Get collision points for a given path (useful for more precise collision detection)
+    pub fn get_collision_points(&self, path: &Path) -> Vec<(i32, i32)> {
+        let center = intersection_center();
+        let mut points = Vec::new();
+
+        match path {
+            Path::NorthToSouth | Path::SouthToNorth => {
+                // Vertical straight path through center
+                for y in (center.1 - 100)..(center.1 + 100) {
+                    points.push((center.0, y));
+                }
+            }
+            Path::EastToWest | Path::WestToEast => {
+                // Horizontal straight path through center
+                for x in (center.0 - 100)..(center.0 + 100) {
+                    points.push((x, center.1));
+                }
+            }
+            Path::NorthToEast => {
+                // Right turn from North to East
+                // Add curve points for the turn
+                let turn_radius = 50;
+                for angle in 0..90 {
+                    let rad = (angle as f32).to_radians();
+                    let x = center.0 + (turn_radius as f32 * rad.cos()) as i32;
+                    let y = center.1 - (turn_radius as f32 * rad.sin()) as i32;
+                    points.push((x, y));
+                }
+            }
+            Path::NorthToWest => {
+                // Left turn from North to West
+                let turn_radius = 80;
+                for angle in 0..90 {
+                    let rad = (angle as f32).to_radians();
+                    let x = center.0 - (turn_radius as f32 * rad.cos()) as i32;
+                    let y = center.1 - (turn_radius as f32 * rad.sin()) as i32;
+                    points.push((x, y));
+                }
+            }
+            // Add similar calculations for other turning paths...
+            _ => {
+                // Default: just add the center point
+                points.push((center.0, center.1));
+            }
+        }
+
+        points
+    }
+
+    // Check if a point is within the intersection area
+    pub fn is_point_in_intersection(&self, x: i32, y: i32) -> bool {
+        let area = intersection_area();
+        x >= area.x() && x < area.x() + area.width() as i32 &&
+            y >= area.y() && y < area.y() + area.height() as i32
+    }
+
+    // Get the entry distance for a vehicle approaching from a given direction
+    pub fn get_entry_distance(&self, direction: &crate::vehicle::Direction, position: (i32, i32)) -> f64 {
+        match direction {
+            crate::vehicle::Direction::North => (position.1 - self.south_entry).max(0) as f64,
+            crate::vehicle::Direction::South => (self.north_entry - position.1).max(0) as f64,
+            crate::vehicle::Direction::East => (self.west_entry - position.0).max(0) as f64,
+            crate::vehicle::Direction::West => (position.0 - self.east_entry).max(0) as f64,
+        }
+    }
+
+    // Get the exit distance for a vehicle leaving in a given direction
+    pub fn get_exit_distance(&self, direction: &crate::vehicle::Direction, position: (i32, i32)) -> f64 {
+        match direction {
+            crate::vehicle::Direction::North => (position.1 - self.north_exit).max(0) as f64,
+            crate::vehicle::Direction::South => (self.south_exit - position.1).max(0) as f64,
+            crate::vehicle::Direction::East => (self.east_exit - position.0).max(0) as f64,
+            crate::vehicle::Direction::West => (position.0 - self.west_exit).max(0) as f64,
         }
     }
 }

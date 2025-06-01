@@ -5,150 +5,239 @@ use std::io::Write;
 use std::process::Command;
 
 fn main() {
-    // Get the project directory
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-
-    // Create assets directory in the project directory
-    let assets_dir = Path::new(&manifest_dir).join("assets");
-    if !assets_dir.exists() {
-        fs::create_dir_all(&assets_dir).unwrap();
-    }
-
-    // Create necessary subdirectories and sample assets
-    create_asset_directories(&assets_dir);
-    create_sample_assets(&assets_dir);
-
-    // Let Cargo know to rerun if any of these directories change
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/");
 
-    // Handle SDL2 library linking
-    link_sdl2_libraries();
-}
+    // Get the project directory
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let assets_dir = Path::new(&manifest_dir).join("assets");
 
-fn link_sdl2_libraries() {
-    // Check if we're on macOS
-    #[cfg(target_os = "macos")]
-    {
-        // Try to find SDL2 libraries via homebrew
-        if let Ok(true) = is_homebrew_available() {
-            println!("Homebrew detected, trying to locate SDL2 libraries...");
+    // Create assets directory structure
+    create_asset_directories(&assets_dir);
+    create_sample_assets(&assets_dir);
 
-            // Get SDL2 paths using homebrew
-            if let Ok(sdl2_path) = get_homebrew_path("sdl2") {
-                println!("cargo:rustc-link-search={}/lib", sdl2_path);
-                println!("cargo:rustc-link-lib=SDL2");
-            } else {
-                println!("SDL2 not found via homebrew, you may need to install it with 'brew install sdl2'");
-            }
+    // Handle SDL2 library linking based on platform
+    handle_sdl2_linking();
 
-            // Try to get SDL2_image path
-            if let Ok(sdl2_image_path) = get_homebrew_path("sdl2_image") {
-                println!("cargo:rustc-link-search={}/lib", sdl2_image_path);
-                println!("cargo:rustc-link-lib=SDL2_image");
-            } else {
-                println!("SDL2_image not found via homebrew, you may need to install it with 'brew install sdl2_image'");
-            }
-
-            // Try to get SDL2_ttf path
-            if let Ok(sdl2_ttf_path) = get_homebrew_path("sdl2_ttf") {
-                println!("cargo:rustc-link-search={}/lib", sdl2_ttf_path);
-                println!("cargo:rustc-link-lib=SDL2_ttf");
-            } else {
-                println!("SDL2_ttf not found via homebrew, you may need to install it with 'brew install sdl2_ttf'");
-            }
-
-            // Link system frameworks
-            println!("cargo:rustc-link-lib=framework=CoreFoundation");
-            println!("cargo:rustc-link-lib=framework=CoreGraphics");
-            println!("cargo:rustc-link-lib=framework=CoreAudio");
-            println!("cargo:rustc-link-lib=framework=AudioToolbox");
-            println!("cargo:rustc-link-lib=framework=Metal");
-        } else {
-            println!("Homebrew not found. Please install SDL2 libraries manually and set appropriate environment variables.");
-        }
-    }
-
-    // For Linux systems
-    #[cfg(target_os = "linux")]
-    {
-        println!("On Linux, you may need to install SDL2 libraries with your package manager.");
-        println!("For example: sudo apt-get install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev");
-    }
-
-    // For Windows systems
-    #[cfg(target_os = "windows")]
-    {
-        println!("On Windows, make sure SDL2 libraries are in your PATH or use appropriate environment variables.");
-    }
-}
-
-fn is_homebrew_available() -> Result<bool, String> {
-    match Command::new("brew").arg("--version").output() {
-        Ok(_) => Ok(true),
-        Err(_) => Ok(false),
-    }
-}
-
-fn get_homebrew_path(package: &str) -> Result<String, String> {
-    match Command::new("brew").args(&["--prefix", package]).output() {
-        Ok(output) => {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                Ok(path)
-            } else {
-                Err(format!("Package {} not found in homebrew", package))
-            }
-        }
-        Err(e) => Err(format!("Failed to execute brew command: {}", e)),
-    }
+    println!("Build script completed successfully!");
 }
 
 fn create_asset_directories(assets_dir: &Path) {
-    let subdirs = ["fonts", "vehicles", "road"];
+    let subdirs = ["fonts", "vehicles", "road", "sounds", "ui"];
+
     for subdir in subdirs.iter() {
         let dir_path = assets_dir.join(subdir);
         if !dir_path.exists() {
-            fs::create_dir_all(&dir_path).unwrap();
+            if let Err(e) = fs::create_dir_all(&dir_path) {
+                println!("cargo:warning=Failed to create directory {:?}: {}", dir_path, e);
+            } else {
+                println!("Created asset directory: {:?}", dir_path);
+            }
         }
     }
 }
 
 fn create_sample_assets(assets_dir: &Path) {
-    // Create placeholder files for the assets
-    // These aren't valid image files, but the renderer has fallbacks
+    // Create placeholder files for assets that the renderer expects
+    let assets_to_create: [(&str, &str); 6] = [
+        ("vehicles/cars.png", "PNG_PLACEHOLDER_FOR_CARS"),
+        ("road/road_right.png", "PNG_PLACEHOLDER_FOR_ROAD_RIGHT"),
+        ("road/road_up.png", "PNG_PLACEHOLDER_FOR_ROAD_UP"),
+        ("road/acera.png", "PNG_PLACEHOLDER_FOR_SIDEWALK"),
+        ("fonts/font.ttf", "TTF_PLACEHOLDER_FONT"),
+        ("README.txt", "Smart Road Simulation Assets\n\nThis directory contains placeholder assets.\nThe renderer will generate fallback graphics if these files are not valid.\n"),
+    ];
 
-    // Vehicles directory
-    let vehicles_dir = assets_dir.join("vehicles");
-    let car_file = vehicles_dir.join("cars.png");
-    if !car_file.exists() {
-        println!("Creating placeholder cars.png...");
-        let mut file = fs::File::create(&car_file).unwrap();
-        file.write_all(b"PLACEHOLDER IMAGE").unwrap();
+    for (relative_path, content) in assets_to_create.iter() {
+        let file_path = assets_dir.join(relative_path);
+
+        if !file_path.exists() {
+            // Create parent directory if it doesn't exist
+            if let Some(parent) = file_path.parent() {
+                if let Err(e) = fs::create_dir_all(parent) {
+                    println!("cargo:warning=Failed to create parent directory for {:?}: {}", file_path, e);
+                    continue;
+                }
+            }
+
+            // Write placeholder content
+            match fs::File::create(&file_path) {
+                Ok(mut file) => {
+                    if let Err(e) = file.write_all(content.as_bytes()) {
+                        println!("cargo:warning=Failed to write to {:?}: {}", file_path, e);
+                    } else {
+                        println!("Created placeholder asset: {:?}", file_path);
+                    }
+                }
+                Err(e) => {
+                    println!("cargo:warning=Failed to create file {:?}: {}", file_path, e);
+                }
+            }
+        }
+    }
+}
+
+fn handle_sdl2_linking() {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    match target_os.as_str() {
+        "macos" => handle_macos_linking(),
+        "linux" => handle_linux_linking(),
+        "windows" => handle_windows_linking(),
+        _ => {
+            println!("cargo:warning=Unsupported target OS: {}", target_os);
+            println!("cargo:warning=You may need to manually configure SDL2 libraries");
+        }
+    }
+}
+
+fn handle_macos_linking() {
+    println!("Configuring SDL2 for macOS...");
+
+    // Try to find SDL2 via Homebrew
+    if is_command_available("brew") {
+        if let Ok(sdl2_path) = get_homebrew_path("sdl2") {
+            println!("cargo:rustc-link-search={}/lib", sdl2_path);
+            println!("cargo:rustc-link-lib=SDL2");
+            println!("Found SDL2 via Homebrew at: {}", sdl2_path);
+        } else {
+            println!("cargo:warning=SDL2 not found via Homebrew");
+            println!("cargo:warning=Install with: brew install sdl2");
+        }
+
+        if let Ok(sdl2_image_path) = get_homebrew_path("sdl2_image") {
+            println!("cargo:rustc-link-search={}/lib", sdl2_image_path);
+            println!("cargo:rustc-link-lib=SDL2_image");
+        } else {
+            println!("cargo:warning=SDL2_image not found");
+            println!("cargo:warning=Install with: brew install sdl2_image");
+        }
+
+        if let Ok(sdl2_ttf_path) = get_homebrew_path("sdl2_ttf") {
+            println!("cargo:rustc-link-search={}/lib", sdl2_ttf_path);
+            println!("cargo:rustc-link-lib=SDL2_ttf");
+        } else {
+            println!("cargo:warning=SDL2_ttf not found");
+            println!("cargo:warning=Install with: brew install sdl2_ttf");
+        }
+    } else {
+        println!("cargo:warning=Homebrew not found");
+        println!("cargo:warning=Install Homebrew or manually configure SDL2");
     }
 
-    // Road directory
-    let road_dir = assets_dir.join("road");
-    let road_file = road_dir.join("road.png");
-    if !road_file.exists() {
-        println!("Creating placeholder road.png...");
-        let mut file = fs::File::create(&road_file).unwrap();
-        file.write_all(b"PLACEHOLDER IMAGE").unwrap();
-    }
+    // Link required macOS frameworks
+    println!("cargo:rustc-link-lib=framework=CoreFoundation");
+    println!("cargo:rustc-link-lib=framework=CoreGraphics");
+    println!("cargo:rustc-link-lib=framework=CoreAudio");
+    println!("cargo:rustc-link-lib=framework=AudioToolbox");
+    println!("cargo:rustc-link-lib=framework=Metal");
+    println!("cargo:rustc-link-lib=framework=QuartzCore");
+}
 
-    let acera_file = road_dir.join("acera.png");
-    if !acera_file.exists() {
-        println!("Creating placeholder acera.png...");
-        let mut file = fs::File::create(&acera_file).unwrap();
-        file.write_all(b"PLACEHOLDER IMAGE").unwrap();
-    }
+fn handle_linux_linking() {
+    println!("Configuring SDL2 for Linux...");
 
-    // Fonts directory (for statistics display)
-    let fonts_dir = assets_dir.join("fonts");
-    let font_file = fonts_dir.join("font.ttf");
-    if !font_file.exists() {
-        println!("Creating placeholder font.ttf...");
-        let mut file = fs::File::create(&font_file).unwrap();
-        file.write_all(b"PLACEHOLDER FONT").unwrap();
+    // Try pkg-config first
+    if is_command_available("pkg-config") {
+        if check_pkg_config("sdl2") {
+            println!("Found SDL2 via pkg-config");
+        } else {
+            println!("cargo:warning=SDL2 not found via pkg-config");
+            print_linux_install_instructions();
+        }
+
+        if check_pkg_config("SDL2_image") {
+            println!("Found SDL2_image via pkg-config");
+        } else {
+            println!("cargo:warning=SDL2_image not found");
+        }
+
+        if check_pkg_config("SDL2_ttf") {
+            println!("Found SDL2_ttf via pkg-config");
+        } else {
+            println!("cargo:warning=SDL2_ttf not found");
+        }
+    } else {
+        println!("cargo:warning=pkg-config not available");
+        print_linux_install_instructions();
+    }
+}
+
+fn handle_windows_linking() {
+    println!("Configuring SDL2 for Windows...");
+
+    // Check for vcpkg
+    if env::var("VCPKG_ROOT").is_ok() {
+        println!("VCPKG detected - using vcpkg SDL2");
+        // vcpkg should handle the linking automatically
+    } else {
+        println!("cargo:warning=VCPKG not found");
+        println!("cargo:warning=For Windows, we recommend using vcpkg to install SDL2");
+        println!("cargo:warning=Alternatively, download SDL2 development libraries");
+        println!("cargo:warning=and set appropriate environment variables");
+    }
+}
+
+fn is_command_available(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+fn get_homebrew_path(package: &str) -> Result<String, String> {
+    let output = Command::new("brew")
+        .args(&["--prefix", package])
+        .output()
+        .map_err(|e| format!("Failed to execute brew: {}", e))?;
+
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(path)
+    } else {
+        Err(format!("Package {} not found in homebrew", package))
+    }
+}
+
+fn check_pkg_config(library: &str) -> bool {
+    Command::new("pkg-config")
+        .args(&["--exists", library])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn print_linux_install_instructions() {
+    println!("cargo:warning=To install SDL2 on Linux:");
+    println!("cargo:warning=Ubuntu/Debian: sudo apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev");
+    println!("cargo:warning=Fedora: sudo dnf install SDL2-devel SDL2_image-devel SDL2_ttf-devel");
+    println!("cargo:warning=Arch: sudo pacman -S sdl2 sdl2_image sdl2_ttf");
+}
+
+// Additional helper function to check if we're in a CI environment
+fn is_ci_environment() -> bool {
+    env::var("CI").is_ok() ||
+        env::var("CONTINUOUS_INTEGRATION").is_ok() ||
+        env::var("GITHUB_ACTIONS").is_ok() ||
+        env::var("TRAVIS").is_ok()
+}
+
+// Function to set up cross-compilation hints
+fn setup_cross_compilation() {
+    if let Ok(target) = env::var("TARGET") {
+        println!("Cross-compiling for target: {}", target);
+
+        // Add target-specific configuration if needed
+        match target.as_str() {
+            "x86_64-pc-windows-gnu" => {
+                println!("cargo:warning=Cross-compiling for Windows from non-Windows");
+                println!("cargo:warning=Ensure mingw-w64 and SDL2 Windows libraries are available");
+            }
+            "aarch64-apple-darwin" => {
+                println!("cargo:warning=Cross-compiling for Apple Silicon");
+                println!("cargo:warning=Ensure SDL2 ARM64 libraries are available");
+            }
+            _ => {}
+        }
     }
 }

@@ -5,7 +5,8 @@ use sdl2::render::Canvas;
 use sdl2::video::Window;
 use sdl2::rect::Point;
 
-use crate::vehicle::Vehicle;
+use crate::vehicle::{Vehicle, Direction, Route};
+use crate::game::VehicleStatistics; // Import the new struct
 
 pub struct Statistics {
     total_vehicles: u32,
@@ -14,11 +15,14 @@ pub struct Statistics {
     max_time: u32,
     min_time: u32,
     close_calls: u32,
-    completed_vehicles: Vec<Vehicle>,
-    // Additional statistics for 6-lane system
+    completed_vehicles: Vec<VehicleStatistics>, // Changed to use VehicleStatistics
+    // Additional statistics for enhanced tracking
     lane_usage: [[u32; 6]; 4], // Direction[North,South,East,West], Lane[0-5]
     avg_waiting_time: f64,
     max_congestion: u32,
+    total_processing_time: f64,
+    collision_count: u32,
+    successful_intersections: u32,
 }
 
 impl Statistics {
@@ -34,6 +38,9 @@ impl Statistics {
             lane_usage: [[0; 6]; 4],
             avg_waiting_time: 0.0,
             max_congestion: 0,
+            total_processing_time: 0.0,
+            collision_count: 0,
+            successful_intersections: 0,
         }
     }
 
@@ -59,41 +66,65 @@ impl Statistics {
         }
     }
 
-    // Record a vehicle that has exited the intersection
-    pub fn record_vehicle_exit(&mut self, vehicle: Vehicle) {
+    // CHANGED: Record vehicle statistics without requiring the full Vehicle struct
+    pub fn record_vehicle_exit_stats(&mut self, vehicle_stats: VehicleStatistics) {
         // Update velocity stats
-        if vehicle.current_velocity > self.max_velocity {
-            self.max_velocity = vehicle.current_velocity;
+        if vehicle_stats.current_velocity > self.max_velocity {
+            self.max_velocity = vehicle_stats.current_velocity;
         }
-        if vehicle.current_velocity < self.min_velocity && vehicle.current_velocity > 0.0 {
-            self.min_velocity = vehicle.current_velocity;
+        if vehicle_stats.current_velocity < self.min_velocity && vehicle_stats.current_velocity > 0.0 {
+            self.min_velocity = vehicle_stats.current_velocity;
         }
 
         // Update time stats
-        if vehicle.time_in_intersection > self.max_time {
-            self.max_time = vehicle.time_in_intersection;
+        if vehicle_stats.time_in_intersection > self.max_time {
+            self.max_time = vehicle_stats.time_in_intersection;
         }
-        if vehicle.time_in_intersection < self.min_time && vehicle.time_in_intersection > 0 {
-            self.min_time = vehicle.time_in_intersection;
+        if vehicle_stats.time_in_intersection < self.min_time && vehicle_stats.time_in_intersection > 0 {
+            self.min_time = vehicle_stats.time_in_intersection;
         }
 
         // Update lane usage
-        let dir_index = match vehicle.direction {
-            crate::vehicle::Direction::North => 0,
-            crate::vehicle::Direction::South => 1,
-            crate::vehicle::Direction::East => 2,
-            crate::vehicle::Direction::West => 3,
+        let dir_index = match vehicle_stats.direction {
+            Direction::North => 0,
+            Direction::South => 1,
+            Direction::East => 2,
+            Direction::West => 3,
         };
-        let lane_index = vehicle.lane.min(5);
+        let lane_index = vehicle_stats.lane.min(5);
         self.lane_usage[dir_index][lane_index] += 1;
 
         // Update average waiting time
-        let new_waiting_time = vehicle.time_in_intersection as f64;
+        let new_waiting_time = vehicle_stats.time_in_intersection as f64;
         let total_vehicles = self.completed_vehicles.len() as f64 + 1.0;
         self.avg_waiting_time = (self.avg_waiting_time * (total_vehicles - 1.0) + new_waiting_time) / total_vehicles;
 
+        // Calculate total processing time
+        let processing_time = vehicle_stats.start_time.elapsed().as_secs_f64();
+        self.total_processing_time += processing_time;
+
+        // Count successful intersection
+        self.successful_intersections += 1;
+
         // Add to completed vehicles list
-        self.completed_vehicles.push(vehicle);
+        self.completed_vehicles.push(vehicle_stats);
+    }
+
+    // DEPRECATED: Keep this method for backward compatibility but mark it as deprecated
+    #[allow(dead_code)]
+    pub fn record_vehicle_exit(&mut self, vehicle: Vehicle) {
+        // Convert Vehicle to VehicleStatistics
+        let vehicle_stats = VehicleStatistics {
+            id: vehicle.id,
+            direction: vehicle.direction,
+            lane: vehicle.lane,
+            route: vehicle.route,
+            current_velocity: vehicle.current_velocity,
+            time_in_intersection: vehicle.time_in_intersection,
+            start_time: vehicle.start_time,
+        };
+
+        self.record_vehicle_exit_stats(vehicle_stats);
     }
 
     // Update close calls count
@@ -101,14 +132,137 @@ impl Statistics {
         self.close_calls += 1;
     }
 
-    // Display statistics in a new window
+    // Record a collision (hopefully this never gets called!)
+    pub fn add_collision(&mut self) {
+        self.collision_count += 1;
+    }
+
+    // Get comprehensive statistics summary
+    pub fn get_summary(&self) -> StatisticsSummary {
+        StatisticsSummary {
+            total_vehicles: self.total_vehicles,
+            completed_vehicles: self.completed_vehicles.len() as u32,
+            max_velocity: self.max_velocity,
+            min_velocity: if self.min_velocity == f64::MAX { 0.0 } else { self.min_velocity },
+            avg_velocity: self.calculate_average_velocity(),
+            max_time: self.max_time,
+            min_time: if self.min_time == u32::MAX { 0 } else { self.min_time },
+            avg_time: self.avg_waiting_time,
+            close_calls: self.close_calls,
+            collision_count: self.collision_count,
+            successful_intersections: self.successful_intersections,
+            max_congestion: self.max_congestion,
+            efficiency_rating: self.calculate_efficiency_rating(),
+        }
+    }
+
+    // Calculate average velocity of all completed vehicles
+    fn calculate_average_velocity(&self) -> f64 {
+        if self.completed_vehicles.is_empty() {
+            return 0.0;
+        }
+
+        let total_velocity: f64 = self.completed_vehicles.iter()
+            .map(|v| v.current_velocity)
+            .sum();
+
+        total_velocity / self.completed_vehicles.len() as f64
+    }
+
+    // Calculate efficiency rating (0-100 scale)
+    fn calculate_efficiency_rating(&self) -> f64 {
+        if self.successful_intersections == 0 {
+            return 100.0; // No vehicles processed yet
+        }
+
+        let base_score = 100.0;
+
+        // Deduct points for collisions (major penalty)
+        let collision_penalty = self.collision_count as f64 * 50.0;
+
+        // Deduct points for close calls (minor penalty)
+        let close_call_penalty = self.close_calls as f64 * 2.0;
+
+        // Deduct points for high congestion
+        let congestion_penalty = if self.max_congestion > 10 {
+            (self.max_congestion - 10) as f64 * 3.0
+        } else {
+            0.0
+        };
+
+        // Deduct points for very slow average times
+        let time_penalty = if self.avg_waiting_time > 5000.0 { // 5 seconds
+            (self.avg_waiting_time - 5000.0) / 100.0
+        } else {
+            0.0
+        };
+
+        let final_score = base_score - collision_penalty - close_call_penalty - congestion_penalty - time_penalty;
+        final_score.max(0.0).min(100.0)
+    }
+
+    // Display statistics in a console-friendly format
+    pub fn print_summary(&self) {
+        let summary = self.get_summary();
+
+        println!("\n╔══════════════════════════════════════╗");
+        println!("║         SIMULATION STATISTICS        ║");
+        println!("╠══════════════════════════════════════╣");
+        println!("║ Total Vehicles:              {:6} ║", summary.total_vehicles);
+        println!("║ Completed Intersections:     {:6} ║", summary.completed_vehicles);
+        println!("║ Successful Rate:             {:5.1}% ║",
+                 if summary.total_vehicles > 0 {
+                     (summary.successful_intersections as f64 / summary.total_vehicles as f64) * 100.0
+                 } else { 0.0 });
+        println!("╠══════════════════════════════════════╣");
+        println!("║ Max Velocity:            {:8.1} px/s ║", summary.max_velocity);
+        println!("║ Min Velocity:            {:8.1} px/s ║", summary.min_velocity);
+        println!("║ Avg Velocity:            {:8.1} px/s ║", summary.avg_velocity);
+        println!("╠══════════════════════════════════════╣");
+        println!("║ Max Intersection Time:     {:6} ms ║", summary.max_time);
+        println!("║ Min Intersection Time:     {:6} ms ║", summary.min_time);
+        println!("║ Avg Intersection Time:   {:8.1} ms ║", summary.avg_time);
+        println!("╠══════════════════════════════════════╣");
+        println!("║ Close Calls:                  {:6} ║", summary.close_calls);
+        println!("║ Collisions:                   {:6} ║", summary.collision_count);
+        println!("║ Max Congestion:               {:6} ║", summary.max_congestion);
+        println!("║ Efficiency Rating:          {:5.1}% ║", summary.efficiency_rating);
+        println!("╚══════════════════════════════════════╝");
+
+        // Print lane usage statistics
+        println!("\n╔══════════════════════════════════════╗");
+        println!("║           LANE USAGE STATS           ║");
+        println!("╠══════════════════════════════════════╣");
+        let directions = ["North", "South", "East ", "West "];
+        for (i, direction) in directions.iter().enumerate() {
+            print!("║ {}: ", direction);
+            for lane in 0..6 {
+                print!("{:4}", self.lane_usage[i][lane]);
+            }
+            println!(" ║");
+        }
+        println!("╚══════════════════════════════════════╝\n");
+    }
+
+    // Display statistics - simplified version for compatibility
     pub fn display(&self) -> Result<(), String> {
+        self.print_summary();
+
+        println!("Press Enter to continue...");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).expect("Failed to read line");
+
+        Ok(())
+    }
+
+    // Create a simple text-based statistics window
+    pub fn display_window(&self) -> Result<(), String> {
         // Create a new window for statistics
         let sdl_context = sdl2::init()?;
         let video_subsystem = sdl_context.video()?;
 
         let window = video_subsystem
-            .window("Smart Road Simulation - Statistics", 600, 500)
+            .window("Smart Road Simulation - Final Statistics", 800, 600)
             .position_centered()
             .build()
             .map_err(|e| e.to_string())?;
@@ -119,12 +273,12 @@ impl Statistics {
             .build()
             .map_err(|e| e.to_string())?;
 
-        // Clear the canvas with a white background
-        canvas.set_draw_color(Color::RGB(255, 255, 255));
+        // Clear the canvas with a dark background
+        canvas.set_draw_color(Color::RGB(30, 30, 30));
         canvas.clear();
 
-        // Draw statistics
-        self.draw_statistics(&mut canvas)?;
+        // Draw statistics boxes
+        self.draw_statistics_boxes(&mut canvas)?;
 
         // Present the canvas
         canvas.present();
@@ -145,139 +299,95 @@ impl Statistics {
         Ok(())
     }
 
-    // Draw statistics
-    fn draw_statistics(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
-        // Draw title
-        canvas.set_draw_color(Color::RGB(50, 50, 100));
-        canvas.fill_rect(Rect::new(0, 0, 600, 40))?;
+    // Draw statistics as colored boxes (since we don't have TTF text rendering)
+    fn draw_statistics_boxes(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
+        let summary = self.get_summary();
 
-        // Draw basic stats
-        self.draw_basic_stats(canvas, 50)?;
+        // Title bar
+        canvas.set_draw_color(Color::RGB(50, 100, 150));
+        canvas.fill_rect(Rect::new(50, 50, 700, 40))?;
 
-        // Draw lane usage stats
-        self.draw_lane_usage(canvas, 250)?;
+        // Main statistics area
+        canvas.set_draw_color(Color::RGB(70, 70, 70));
+        canvas.fill_rect(Rect::new(50, 100, 700, 450))?;
 
-        // Draw additional stats
-        self.draw_additional_stats(canvas, 400)?;
-
-        Ok(())
-    }
-
-    // Draw basic statistics
-    fn draw_basic_stats(&self, canvas: &mut Canvas<Window>, start_y: i32) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
-        canvas.draw_line(Point::new(50, start_y), Point::new(550, start_y))?;
-
-        // Title for this section
-        canvas.set_draw_color(Color::RGB(0, 0, 128));
-        canvas.fill_rect(Rect::new(50, start_y + 10, 500, 20))?;
-
-        // Stats values
+        // Draw value indicators using colored bars
+        let mut y_pos = 120;
         let stats = [
-            ("Total Vehicles", self.total_vehicles as f64, Color::RGB(220, 0, 0)),
-            ("Max Velocity", self.max_velocity, Color::RGB(0, 190, 0)),
-            ("Min Velocity", if self.min_velocity == f64::MAX { 0.0 } else { self.min_velocity }, Color::RGB(0, 120, 200)),
-            ("Max Time (ms)", self.max_time as f64, Color::RGB(200, 200, 0)),
-            ("Min Time (ms)", if self.min_time == u32::MAX { 0.0 } else { self.min_time as f64 }, Color::RGB(200, 0, 200)),
-            ("Close Calls", self.close_calls as f64, Color::RGB(0, 180, 180))
+            ("Total Vehicles", summary.total_vehicles as f64, Color::RGB(100, 200, 100)),
+            ("Completed", summary.completed_vehicles as f64, Color::RGB(150, 250, 150)),
+            ("Max Velocity", summary.max_velocity / 10.0, Color::RGB(255, 100, 100)), // Scaled down
+            ("Avg Velocity", summary.avg_velocity / 10.0, Color::RGB(255, 150, 100)),
+            ("Max Time", summary.max_time as f64 / 100.0, Color::RGB(100, 100, 255)), // Scaled down
+            ("Close Calls", summary.close_calls as f64, Color::RGB(255, 255, 100)),
+            ("Efficiency", summary.efficiency_rating, Color::RGB(100, 255, 255)),
         ];
 
-        let mut y_pos = start_y + 40;
-        for (i, (label, value, color)) in stats.iter().enumerate() {
-            // Label background
-            canvas.set_draw_color(Color::RGB(240, 240, 240));
-            canvas.fill_rect(Rect::new(50, y_pos, 150, 25))?;
+        for (i, (name, value, color)) in stats.iter().enumerate() {
+            // Label area
+            canvas.set_draw_color(Color::RGB(90, 90, 90));
+            canvas.fill_rect(Rect::new(70, y_pos, 200, 30))?;
 
-            // Value bar
-            let bar_width = (value.min(300.0) as u32).max(5); // Ensure minimum visibility
+            // Value bar (scaled to fit in 400 pixels max)
+            let bar_width = (value * 4.0).min(400.0).max(5.0) as u32;
             canvas.set_draw_color(*color);
-            canvas.fill_rect(Rect::new(210, y_pos, bar_width, 25))?;
+            canvas.fill_rect(Rect::new(280, y_pos, bar_width, 30))?;
 
-            // Value text position indicator
-            canvas.set_draw_color(Color::RGB(0, 0, 0));
-            canvas.draw_rect(Rect::new(210 + bar_width as i32, y_pos, 2, 25))?;
+            // Border
+            canvas.set_draw_color(Color::RGB(200, 200, 200));
+            canvas.draw_rect(Rect::new(70, y_pos, 610, 30))?;
 
-            y_pos += 30;
+            y_pos += 50;
         }
 
-        Ok(())
-    }
-
-    // Draw lane usage statistics
-    fn draw_lane_usage(&self, canvas: &mut Canvas<Window>, start_y: i32) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
-        canvas.draw_line(Point::new(50, start_y), Point::new(550, start_y))?;
-
-        // Title for this section
-        canvas.set_draw_color(Color::RGB(0, 100, 0));
-        canvas.fill_rect(Rect::new(50, start_y + 10, 500, 20))?;
+        // Draw lane usage visualization
+        y_pos = 450;
+        canvas.set_draw_color(Color::RGB(50, 50, 50));
+        canvas.fill_rect(Rect::new(70, y_pos, 660, 80))?;
 
         // Draw lane usage bars for each direction
         let directions = ["North", "South", "East", "West"];
         let colors = [
-            Color::RGB(0, 0, 200), // North - Blue
-            Color::RGB(200, 0, 0), // South - Red
-            Color::RGB(0, 150, 0), // East - Green
-            Color::RGB(150, 100, 0), // West - Brown
+            Color::RGB(255, 100, 100), // North - Red
+            Color::RGB(100, 255, 100), // South - Green
+            Color::RGB(100, 100, 255), // East - Blue
+            Color::RGB(255, 255, 100), // West - Yellow
         ];
 
-        let mut y_pos = start_y + 40;
-        for dir in 0..4 {
-            // Direction label
-            canvas.set_draw_color(Color::RGB(240, 240, 240));
-            canvas.fill_rect(Rect::new(50, y_pos, 80, 25))?;
-
-            // Lane usage bars
-            let bar_height = 25;
-            let max_lane_usage = self.lane_usage[dir].iter().max().copied().unwrap_or(1).max(1) as f64;
+        for (dir_idx, color) in colors.iter().enumerate() {
+            let dir_y = y_pos + 10 + (dir_idx as i32 * 15);
 
             for lane in 0..6 {
-                let usage = self.lane_usage[dir][lane] as f64;
-                let bar_width = ((usage / max_lane_usage) * 400.0).min(400.0).max(1.0) as u32;
+                let usage = self.lane_usage[dir_idx][lane];
+                let bar_width = (usage * 3).min(30); // Scale the bars
 
-                canvas.set_draw_color(colors[dir]);
-                canvas.fill_rect(Rect::new(140 + (lane as i32 * 65), y_pos, bar_width, bar_height as u32))?;
-
-                // Lane number
-                canvas.set_draw_color(Color::RGB(0, 0, 0));
-                canvas.draw_rect(Rect::new(140 + (lane as i32 * 65), y_pos + bar_height, 20, 10))?;
+                canvas.set_draw_color(*color);
+                canvas.fill_rect(Rect::new(
+                    90 + (lane as i32 * 100),
+                    dir_y,
+                    bar_width,
+                    10
+                ))?;
             }
-
-            y_pos += 40;
         }
 
         Ok(())
     }
+}
 
-    // Draw additional statistics
-    fn draw_additional_stats(&self, canvas: &mut Canvas<Window>, start_y: i32) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
-        canvas.draw_line(Point::new(50, start_y), Point::new(550, start_y))?;
-
-        // Title for this section
-        canvas.set_draw_color(Color::RGB(128, 0, 128));
-        canvas.fill_rect(Rect::new(50, start_y + 10, 500, 20))?;
-
-        // Additional stats
-        let stats = [
-            ("Avg Waiting Time (ms)", self.avg_waiting_time, Color::RGB(150, 50, 200)),
-            ("Max Congestion", self.max_congestion as f64, Color::RGB(200, 100, 50)),
-        ];
-
-        let mut y_pos = start_y + 40;
-        for (label, value, color) in stats {
-            // Label background
-            canvas.set_draw_color(Color::RGB(240, 240, 240));
-            canvas.fill_rect(Rect::new(50, y_pos, 200, 25))?;
-
-            // Value bar
-            let bar_width = (value.min(300.0) as u32).max(5); // Ensure minimum visibility
-            canvas.set_draw_color(color);
-            canvas.fill_rect(Rect::new(260, y_pos, bar_width, 25))?;
-
-            y_pos += 30;
-        }
-
-        Ok(())
-    }
+// Structure to hold statistics summary
+pub struct StatisticsSummary {
+    pub total_vehicles: u32,
+    pub completed_vehicles: u32,
+    pub max_velocity: f64,
+    pub min_velocity: f64,
+    pub avg_velocity: f64,
+    pub max_time: u32,
+    pub min_time: u32,
+    pub avg_time: f64,
+    pub close_calls: u32,
+    pub collision_count: u32,
+    pub successful_intersections: u32,
+    pub max_congestion: u32,
+    pub efficiency_rating: f64,
 }
