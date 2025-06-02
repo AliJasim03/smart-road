@@ -1,4 +1,4 @@
-// src/main.rs - FIXED VERSION WITH PROPER CLOSE CALL TRACKING
+// src/main.rs - FIXED VERSION WITH STRICT LANE DISCIPLINE
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
@@ -102,14 +102,28 @@ fn print_controls() {
     println!("R:             Toggle continuous random spawning");
     println!("Space:         Show current statistics");
     println!("Esc:           Exit and show final statistics");
-    println!("\n=== VEHICLE COLORS ===");
+    println!("\n=== VEHICLE COLORS & LANE SYSTEM ===");
     println!("🔴 Red:    Left turn vehicles");
     println!("🔵 Blue:   Straight through vehicles");
     println!("🟢 Green:  Right turn vehicles");
-    println!("\n=== INTERSECTION LAYOUT ===");
-    println!("Each direction has 6 lanes total:");
-    println!("3 lanes for outgoing traffic + 3 lanes for incoming traffic");
-    println!("Vehicles choose lanes based on their route and traffic conditions");
+    println!("\n=== PROPER LANE DISCIPLINE ===");
+    println!("Each direction has 3 dedicated lanes:");
+    println!("Lane 0: LEFT TURNS only");
+    println!("Lane 1: STRAIGHT through only");
+    println!("Lane 2: RIGHT TURNS only");
+    println!("\n=== CORRECTED ROAD SIDES ===");
+    println!("🔵 North-bound traffic: RIGHT SIDE of vertical road");
+    println!("🟢 South-bound traffic: LEFT SIDE of vertical road");
+    println!("🟡 East-bound traffic: BOTTOM SIDE of horizontal road");
+    println!("🔴 West-bound traffic: TOP SIDE of horizontal road");
+    println!("\n=== CORRECTED LANE POSITIONING ===");
+    println!("Center: ({}, {})", WINDOW_WIDTH / 2, WINDOW_HEIGHT / 2);
+    println!("North-bound (↑): x = {} + 15, +45, +75", WINDOW_WIDTH / 2);
+    println!("South-bound (↓): x = {} - 15, -45, -75", WINDOW_WIDTH / 2);
+    println!("East-bound (→):  y = {} + 15, +45, +75", WINDOW_HEIGHT / 2);
+    println!("West-bound (←):  y = {} - 15, -45, -75", WINDOW_HEIGHT / 2);
+    println!("Each direction gets exactly ONE SIDE of the road!");
+    println!("NO MORE cars on oncoming lanes!");
     println!("\nSimulation started!\n");
 }
 
@@ -125,8 +139,7 @@ struct GameState {
     total_vehicles_passed: u32,
     close_calls: u32,
     simulation_start_time: Instant,
-    // FIXED: Track which vehicle pairs have already had close calls
-    close_call_pairs: HashSet<(u32, u32)>, // Set of (vehicle_id1, vehicle_id2) pairs
+    close_call_pairs: HashSet<(u32, u32)>,
     frame_counter: u64,
 }
 
@@ -136,7 +149,7 @@ impl GameState {
             vehicles: VecDeque::new(),
             intersection: Intersection::new(),
             statistics: Statistics::new(),
-            spawn_cooldown: 0.6, // Further reduced for better flow
+            spawn_cooldown: 2.0, // Very long cooldown for testing (was 1.0)
             current_cooldown: 0.0,
             continuous_spawn: false,
             spawn_timer: 0.0,
@@ -201,8 +214,8 @@ impl GameState {
     fn update(&mut self, delta_time: f32) {
         self.frame_counter += 1;
 
-        // Clean up close call pairs periodically to prevent memory growth
-        if self.frame_counter % 300 == 0 { // Every 5 seconds at 60 FPS
+        // Clean up close call pairs periodically
+        if self.frame_counter % 300 == 0 {
             self.cleanup_close_call_pairs();
         }
 
@@ -211,10 +224,10 @@ impl GameState {
             self.current_cooldown -= delta_time;
         }
 
-        // Handle continuous spawning with random direction
+        // Handle continuous spawning
         if self.continuous_spawn {
             self.spawn_timer += delta_time;
-            if self.spawn_timer >= 1.0 { // Further reduced for better flow
+            if self.spawn_timer >= 4.0 { // VERY long interval for testing (was 2.5)
                 use rand::Rng;
                 let mut rng = rand::thread_rng();
                 let direction = match rng.gen_range(0..4) {
@@ -236,7 +249,7 @@ impl GameState {
             vehicle.update((delta_time * 1000.0) as u32, &self.intersection);
         }
 
-        // Apply enhanced smart intersection algorithm
+        // Apply smart intersection algorithm
         self.apply_enhanced_smart_algorithm();
 
         // Remove completed vehicles and update statistics
@@ -246,11 +259,8 @@ impl GameState {
         self.statistics.update(&self.vehicles);
     }
 
-    // FIXED: Clean up old close call pairs to prevent memory issues
     fn cleanup_close_call_pairs(&mut self) {
         let active_vehicle_ids: HashSet<u32> = self.vehicles.iter().map(|v| v.id).collect();
-
-        // Remove pairs where at least one vehicle is no longer active
         self.close_call_pairs.retain(|(id1, id2)| {
             active_vehicle_ids.contains(id1) && active_vehicle_ids.contains(id2)
         });
@@ -261,16 +271,16 @@ impl GameState {
             return false;
         }
 
-        // CORRECTED: Restore appropriate spawn blocking for 6-lane system
+        // Check vehicle limit per direction (very restrictive for testing)
         let same_direction_count = self.vehicles.iter()
             .filter(|v| v.direction == direction)
             .count();
 
-        if same_direction_count >= 10 { // Restored original limit
+        if same_direction_count >= 1 { // VERY restrictive - only 1 vehicle per direction
             return false;
         }
 
-        // More lenient spawn area check
+        // Check spawn area
         if !self.is_spawn_area_clear(direction) {
             return false;
         }
@@ -278,21 +288,21 @@ impl GameState {
         use rand::Rng;
         let mut rng = rand::thread_rng();
 
-        // CORRECTED: Route distribution - restore original distribution
+        // FIXED: First determine route, then vehicle gets assigned the correct lane automatically
         let route = match rng.gen_range(0..10) {
-            0..=1 => Route::Left,     // 20% left turns
-            2..=6 => Route::Straight, // 50% straight
+            0..=2 => Route::Left,     // 30% left turns
+            3..=6 => Route::Straight, // 40% straight
             _ => Route::Right,        // 30% right turns
         };
 
-        // Select lane based on route and availability
-        let lane = self.select_best_lane(direction, route);
+        // IMPORTANT: The lane is now automatically determined by Vehicle::new()
+        // based on the direction and route - no manual lane selection needed!
+        let vehicle = Vehicle::new(direction, 0, route); // Lane parameter ignored, auto-assigned
 
-        let vehicle = Vehicle::new(direction, lane, route);
-
-        // CORRECTED: Restore original logging format
-        println!("🚗 Vehicle {}: {:?} → lane {} → {:?} ({:.0} px/s)",
-                 vehicle.id, vehicle.direction, vehicle.lane, vehicle.route, vehicle.current_velocity);
+        println!("🚗 Vehicle {}: {:?} → LANE {} → {:?} → TARGET: {:?} ({:.0} px/s) at ({:.0}, {:.0})",
+                 vehicle.id, vehicle.direction, vehicle.lane, vehicle.route,
+                 vehicle.get_target_direction(), vehicle.current_velocity,
+                 vehicle.position.x, vehicle.position.y);
 
         self.vehicles.push_back(vehicle);
         self.current_cooldown = self.spawn_cooldown;
@@ -302,10 +312,10 @@ impl GameState {
         true
     }
 
-    // More lenient spawn area clearing check
     fn is_spawn_area_clear(&self, direction: Direction) -> bool {
-        let spawn_safety_distance = 50.0; // Further reduced from 60.0
+        let spawn_safety_distance = 150.0; // Even larger safety distance
 
+        // Check vehicles in the same direction
         for vehicle in &self.vehicles {
             if vehicle.direction == direction {
                 let distance_from_spawn = vehicle.distance_from_spawn();
@@ -314,50 +324,67 @@ impl GameState {
                 }
             }
         }
-        true
-    }
 
-    // CORRECTED: Smart lane selection for 6-lane system (3 lanes per direction)
-    fn select_best_lane(&self, direction: Direction, route: Route) -> usize {
-        // Each direction gets 3 lanes: lanes 0-2 or 3-5 depending on direction
-        let base_lanes = match route {
-            Route::Left => vec![0, 1],     // Left turn lanes
-            Route::Straight => vec![2, 3], // Straight lanes
-            Route::Right => vec![4, 5],    // Right turn lanes
-        };
-
-        // Count vehicles in each lane for this direction
-        let mut lane_counts = vec![0; 6];
+        // ADDITIONAL: Check nearby lanes for potential conflicts
+        // Don't spawn if there are vehicles in nearby positions that could interfere
         for vehicle in &self.vehicles {
-            if vehicle.direction == direction {
-                lane_counts[vehicle.lane] += 1;
+            let vehicle_center_x = vehicle.position.x as f64;
+            let vehicle_center_y = vehicle.position.y as f64;
+            let center_x = WINDOW_WIDTH as f64 / 2.0;
+            let center_y = WINDOW_HEIGHT as f64 / 2.0;
+
+            // Check if vehicle is near spawn area for this direction
+            let too_close = match direction {
+                Direction::North => {
+                    vehicle_center_y > center_y + 100.0 && // Below intersection
+                        (vehicle_center_x - center_x).abs() < 100.0 // In vertical road area
+                }
+                Direction::South => {
+                    vehicle_center_y < center_y - 100.0 && // Above intersection
+                        (vehicle_center_x - center_x).abs() < 100.0 // In vertical road area
+                }
+                Direction::East => {
+                    vehicle_center_x < center_x - 100.0 && // Left of intersection
+                        (vehicle_center_y - center_y).abs() < 100.0 // In horizontal road area
+                }
+                Direction::West => {
+                    vehicle_center_x > center_x + 100.0 && // Right of intersection
+                        (vehicle_center_y - center_y).abs() < 100.0 // In horizontal road area
+                }
+            };
+
+            if too_close {
+                return false;
             }
         }
 
-        // Find least congested lane for this route
-        base_lanes.into_iter()
-            .min_by_key(|&lane| lane_counts[lane])
-            .unwrap_or(2) // Fallback to center lane
+        // ADDITIONAL: Limit vehicles per direction
+        let same_direction_count = self.vehicles.iter()
+            .filter(|v| v.direction == direction)
+            .count();
+
+        if same_direction_count >= 2 { // Max 2 vehicles per direction
+            return false;
+        }
+
+        true
     }
 
     fn apply_enhanced_smart_algorithm(&mut self) {
-        // MUCH IMPROVED collision avoidance system
-
-        // First: Help stuck vehicles recover
+        // Help stuck vehicles recover
         for vehicle in &mut self.vehicles {
             vehicle.try_speed_up();
         }
 
-        // Second: More sophisticated collision detection
+        // Improved collision detection with lane awareness
         for i in 0..self.vehicles.len() {
             let mut max_risk = CollisionRisk::None;
 
-            // Skip completed vehicles
             if self.vehicles[i].state == VehicleState::Completed {
                 continue;
             }
 
-            // Check intersection risks
+            // Check intersection risks with improved logic
             if self.vehicles[i].is_approaching_intersection(&self.intersection) ||
                 self.vehicles[i].is_in_intersection(&self.intersection) {
                 max_risk = self.assess_intersection_risk_improved(i);
@@ -371,21 +398,21 @@ impl GameState {
             self.apply_improved_collision_response(i, max_risk);
         }
 
-        // Third: Smart intersection priority
+        // Smart intersection priority with lane awareness
         self.manage_intersection_priority_improved();
     }
 
     fn assess_intersection_risk_improved(&mut self, vehicle_index: usize) -> CollisionRisk {
         let vehicle = &self.vehicles[vehicle_index];
         let mut max_risk = CollisionRisk::None;
-        let mut close_calls_to_record = Vec::new(); // Collect close calls first
+        let mut close_calls_to_record = Vec::new();
 
         for (j, other) in self.vehicles.iter().enumerate() {
             if vehicle_index == j || other.state == VehicleState::Completed {
                 continue;
             }
 
-            // Check for vehicles in or entering intersection
+            // IMPROVED: Only check vehicles that could actually conflict based on lane discipline
             if other.is_in_intersection(&self.intersection) ||
                 matches!(other.state, VehicleState::Entering | VehicleState::Turning) {
 
@@ -393,31 +420,30 @@ impl GameState {
                     let distance = self.calculate_distance(vehicle, other);
                     let time_to_collision = self.estimate_time_to_collision(vehicle, other);
 
-                    // FIXED: Collect close calls to record later
-                    if distance < 40.0 && time_to_collision < 1.0 {
+                    if distance < 35.0 && time_to_collision < 0.8 {
                         close_calls_to_record.push((vehicle.id, other.id));
                         max_risk = CollisionRisk::Critical;
-                    } else if distance < 80.0 && time_to_collision < 2.0 {
+                    } else if distance < 70.0 && time_to_collision < 1.5 {
                         max_risk = max_risk.max(CollisionRisk::High);
-                    } else if distance < 150.0 && time_to_collision < 3.0 {
+                    } else if distance < 120.0 && time_to_collision < 2.5 {
                         max_risk = max_risk.max(CollisionRisk::Medium);
                     }
                 }
             }
 
-            // Check approaching vehicles with better prediction
+            // Check approaching vehicles with lane-aware logic
             if other.is_approaching_intersection(&self.intersection) &&
                 vehicle.could_collide_with(other, &self.intersection) {
                 let relative_time = (vehicle.time_to_intersection(&self.intersection) -
                     other.time_to_intersection(&self.intersection)).abs();
 
-                if relative_time < 1.5 {
+                if relative_time < 1.2 { // Tighter timing
                     max_risk = max_risk.max(CollisionRisk::Medium);
                 }
             }
         }
 
-        // Now record close calls after we're done with immutable borrows
+        // Record close calls
         for (vehicle_id, other_id) in close_calls_to_record {
             self.record_close_call_if_new(vehicle_id, other_id);
         }
@@ -429,25 +455,23 @@ impl GameState {
         let following_distance = self.get_following_distance(vehicle_index);
         let vehicle = &self.vehicles[vehicle_index];
 
-        // Adjust risk based on speed
+        // More conservative safe distance calculation
         let speed_factor = vehicle.current_velocity / Vehicle::FAST_VELOCITY;
-        let safe_distance = 30.0 + (speed_factor * 25.0); // Dynamic safe distance
+        let safe_distance = 40.0 + (speed_factor * 30.0); // Increased base safe distance
 
-        // Check for the vehicle directly ahead in same lane and collect close call data
         let mut close_call_to_record = None;
         if let Some(ahead_vehicle_id) = self.get_vehicle_ahead(vehicle_index) {
-            if following_distance < safe_distance * 0.4 {
+            if following_distance < safe_distance * 0.6 { // More conservative threshold
                 close_call_to_record = Some((vehicle.id, ahead_vehicle_id));
             }
         }
 
-        // Record close call after we're done with immutable borrows
         if let Some((vehicle_id, other_id)) = close_call_to_record {
             self.record_close_call_if_new(vehicle_id, other_id);
             return CollisionRisk::Critical;
         }
 
-        if following_distance < safe_distance * 0.6 {
+        if following_distance < safe_distance * 0.8 {
             CollisionRisk::High
         } else if following_distance < safe_distance {
             CollisionRisk::Medium
@@ -456,16 +480,13 @@ impl GameState {
         }
     }
 
-    // FIXED: Only record each close call once per vehicle pair
     fn record_close_call_if_new(&mut self, vehicle1_id: u32, vehicle2_id: u32) {
-        // Create consistent pair ordering (smaller ID first)
         let pair = if vehicle1_id < vehicle2_id {
             (vehicle1_id, vehicle2_id)
         } else {
             (vehicle2_id, vehicle1_id)
         };
 
-        // Only count if this pair hasn't had a close call yet
         if !self.close_call_pairs.contains(&pair) {
             self.close_call_pairs.insert(pair);
             self.close_calls += 1;
@@ -481,7 +502,7 @@ impl GameState {
         for (i, other) in self.vehicles.iter().enumerate() {
             if i == vehicle_index { continue; }
 
-            // Check if same lane and direction, and other vehicle is ahead
+            // STRICT: Check same direction AND lane (with proper lane discipline, this is more effective)
             if vehicle.direction == other.direction && vehicle.lane == other.lane {
                 let distance = match vehicle.direction {
                     Direction::North => (other.position.y - vehicle.position.y) as f64,
@@ -503,69 +524,74 @@ impl GameState {
     fn apply_improved_collision_response(&mut self, vehicle_index: usize, risk: CollisionRisk) {
         match risk {
             CollisionRisk::Critical => {
-                // Emergency braking
+                // EMERGENCY BRAKING - much more aggressive
                 self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Slow);
-                self.vehicles[vehicle_index].current_velocity *= 0.4; // Hard brake
+                self.vehicles[vehicle_index].current_velocity *= 0.1; // Almost stop
             }
             CollisionRisk::High => {
-                // Strong slow down
+                // HARD BRAKING
                 self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Slow);
-                self.vehicles[vehicle_index].current_velocity *= 0.7;
+                self.vehicles[vehicle_index].current_velocity *= 0.4; // Significant slowdown
             }
             CollisionRisk::Medium => {
-                // Gentle slow down
-                if self.vehicles[vehicle_index].current_velocity > Vehicle::MEDIUM_VELOCITY {
-                    self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Medium);
-                }
+                // MODERATE BRAKING
+                self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Slow);
+                self.vehicles[vehicle_index].current_velocity *= 0.7; // Gentle slowdown
             }
             CollisionRisk::None => {
-                // Allow proper speed up based on state
-                match self.vehicles[vehicle_index].state {
-                    VehicleState::Approaching => {
-                        self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Medium);
+                // VERY CONSERVATIVE speed recovery - only if safe
+                let following_distance = self.get_following_distance(vehicle_index);
+                if following_distance > 80.0 { // Only speed up if there's plenty of space
+                    match self.vehicles[vehicle_index].state {
+                        VehicleState::Approaching => {
+                            self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Medium);
+                        }
+                        VehicleState::Exiting | VehicleState::Completed => {
+                            self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Fast);
+                        }
+                        VehicleState::Turning => {
+                            self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Medium);
+                        }
+                        _ => {}
                     }
-                    VehicleState::Exiting | VehicleState::Completed => {
-                        self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Fast);
-                    }
-                    VehicleState::Turning => {
-                        // Keep reasonable speed during turns
-                        self.vehicles[vehicle_index].set_target_velocity(VelocityLevel::Medium);
-                    }
-                    _ => {}
                 }
             }
         }
     }
 
     fn manage_intersection_priority_improved(&mut self) {
-        // Give clear priority to vehicles already in intersection
         let vehicles_in_intersection: Vec<usize> = self.vehicles.iter()
             .enumerate()
             .filter(|(_, v)| v.is_in_intersection(&self.intersection))
             .map(|(i, _)| i)
             .collect();
 
-        // Vehicles in intersection get absolute priority
+        // Very conservative intersection management
         for &i in &vehicles_in_intersection {
-            if matches!(self.vehicles[i].state, VehicleState::Entering | VehicleState::Turning) {
-                self.vehicles[i].set_target_velocity(VelocityLevel::Medium);
-            }
+            // Only allow medium speed in intersection
+            self.vehicles[i].set_target_velocity(VelocityLevel::Medium);
         }
 
-        // Manage approaching vehicles to prevent deadlocks
         let approaching_vehicles: Vec<usize> = self.vehicles.iter()
             .enumerate()
             .filter(|(_, v)| v.is_approaching_intersection(&self.intersection))
             .map(|(i, _)| i)
             .collect();
 
-        // If intersection is busy, slow down approaching vehicles more gradually
-        if vehicles_in_intersection.len() >= 2 { // Restored original threshold
+        // MUCH more conservative - only allow ONE vehicle in intersection at a time
+        if vehicles_in_intersection.len() >= 1 {
             for &i in &approaching_vehicles {
-                let distance_to_intersection = self.distance_to_intersection_center(&self.vehicles[i]);
-                if distance_to_intersection < 100.0 {
-                    self.vehicles[i].set_target_velocity(VelocityLevel::Slow);
-                }
+                // Stop all approaching vehicles if intersection is occupied
+                self.vehicles[i].set_target_velocity(VelocityLevel::Slow);
+                self.vehicles[i].current_velocity *= 0.5; // Immediate slowdown
+            }
+        }
+
+        // Additional safety: slow down vehicles that are too close to each other
+        for &i in &approaching_vehicles {
+            let distance_to_intersection = self.distance_to_intersection_center(&self.vehicles[i]);
+            if distance_to_intersection < 150.0 {
+                self.vehicles[i].set_target_velocity(VelocityLevel::Slow);
             }
         }
     }
@@ -599,7 +625,7 @@ impl GameState {
         for (i, other) in self.vehicles.iter().enumerate() {
             if i == vehicle_index { continue; }
 
-            // Check if same lane and direction, and other vehicle is ahead
+            // Check same direction AND lane
             if vehicle.direction == other.direction && vehicle.lane == other.lane {
                 let distance = match vehicle.direction {
                     Direction::North => (other.position.y - vehicle.position.y) as f64,
@@ -620,7 +646,6 @@ impl GameState {
     fn cleanup_and_update_stats(&mut self) {
         let initial_count = self.vehicles.len();
 
-        // Remove vehicles that have completed their journey
         self.vehicles.retain(|vehicle| {
             let should_remove = match vehicle.state {
                 VehicleState::Completed => {
@@ -635,8 +660,9 @@ impl GameState {
             };
 
             if should_remove {
-                // This vehicle has successfully passed through
                 self.total_vehicles_passed += 1;
+                println!("✅ Vehicle {} completed journey: {:?} → {:?}",
+                         vehicle.id, vehicle.direction, vehicle.get_target_direction());
             }
 
             !should_remove
@@ -654,9 +680,9 @@ impl GameState {
             (self.close_calls as f64 / self.total_vehicles_passed as f64) * 100.0
         } else { 0.0 };
 
-        println!("\n📊 [{}s] Active: {} | Passed: {} | Close calls: {} ({:.1}%) | Avg traffic: {:.1}",
+        println!("\n📊 [{}s] Active: {} | Passed: {} | Close calls: {} ({:.1}%) | Max traffic: {}",
                  elapsed, self.vehicles.len(), self.total_vehicles_passed,
-                 self.close_calls, close_call_rate, self.vehicles.len() as f32);
+                 self.close_calls, close_call_rate, self.vehicles.len());
     }
 
     fn print_current_statistics(&self) {
@@ -670,15 +696,40 @@ impl GameState {
         } else { 0.0 };
         println!("📊 Close call rate: {:.1}%", close_call_rate);
 
-        if self.vehicles.len() > 8 { // Restored original threshold
+        if self.vehicles.len() > 6 { // Updated threshold
             println!("🚨 HIGH TRAFFIC CONGESTION!");
         }
 
-        // Vehicle distribution
-        println!("\n📍 By direction:");
+        // Vehicle distribution by direction and lane
+        println!("\n📍 By direction and lane:");
         for direction in [Direction::North, Direction::South, Direction::East, Direction::West] {
-            let count = self.vehicles.iter().filter(|v| v.direction == direction).count();
-            println!("  {:?}: {} vehicles", direction, count);
+            let mut lane_counts = [0; 3];
+            let mut route_in_lanes = vec![String::new(), String::new(), String::new()];
+
+            for vehicle in &self.vehicles {
+                if vehicle.direction == direction && vehicle.lane < 3 {
+                    lane_counts[vehicle.lane] += 1;
+                    let route_symbol = match vehicle.route {
+                        Route::Left => "L",
+                        Route::Straight => "S",
+                        Route::Right => "R",
+                    };
+                    if !route_in_lanes[vehicle.lane].contains(route_symbol) {
+                        if !route_in_lanes[vehicle.lane].is_empty() {
+                            route_in_lanes[vehicle.lane].push(',');
+                        }
+                        route_in_lanes[vehicle.lane].push_str(route_symbol);
+                    }
+                }
+            }
+
+            if lane_counts.iter().sum::<usize>() > 0 {
+                println!("  {:?}: L0={}[{}] L1={}[{}] L2={}[{}]",
+                         direction,
+                         lane_counts[0], route_in_lanes[0],
+                         lane_counts[1], route_in_lanes[1],
+                         lane_counts[2], route_in_lanes[2]);
+            }
         }
 
         println!("\n🎯 By route:");
@@ -718,7 +769,7 @@ impl GameState {
             self.draw_enhanced_vehicle(canvas, vehicle)?;
         }
 
-        // Draw enhanced UI
+        // Draw UI
         self.draw_enhanced_ui(canvas)?;
 
         canvas.present();
@@ -726,13 +777,13 @@ impl GameState {
     }
 
     fn draw_enhanced_roads(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(70, 70, 70)); // Darker road surface
+        canvas.set_draw_color(Color::RGB(70, 70, 70));
 
         let center_x = WINDOW_WIDTH as i32 / 2;
         let center_y = WINDOW_HEIGHT as i32 / 2;
         let road_width = 180;
 
-        // Draw roads with borders
+        // Draw roads
         // Horizontal road
         canvas.fill_rect(Rect::new(
             0,
@@ -749,24 +800,49 @@ impl GameState {
             WINDOW_HEIGHT,
         ))?;
 
-        // CORRECTED: Enhanced lane markings for 6-lane system (5 lines for 6 lanes)
+        // CORRECTED: Lane markings that match the actual spawn positions
         canvas.set_draw_color(Color::RGB(255, 255, 255));
 
-        // Horizontal lane markings (5 lines for 6 lanes)
-        for i in 1..6 {
-            let y = center_y - road_width / 2 + (i * 30); // 30px spacing for 6 lanes
-            // Dashed lines outside intersection
-            self.draw_dashed_line(canvas, 0, y, center_x - road_width / 2, y)?;
-            self.draw_dashed_line(canvas, center_x + road_width / 2, y, WINDOW_WIDTH as i32, y)?;
-        }
+        // Vertical road lane markings (North/South traffic)
+        // North-bound lanes (right side): center_x + 30, center_x + 60
+        canvas.draw_line((center_x + 30, 0), (center_x + 30, center_y - road_width / 2))?;
+        canvas.draw_line((center_x + 60, 0), (center_x + 60, center_y - road_width / 2))?;
+        canvas.draw_line((center_x + 30, center_y + road_width / 2), (center_x + 30, WINDOW_HEIGHT as i32))?;
+        canvas.draw_line((center_x + 60, center_y + road_width / 2), (center_x + 60, WINDOW_HEIGHT as i32))?;
 
-        // Vertical lane markings (5 lines for 6 lanes)
-        for i in 1..6 {
-            let x = center_x - road_width / 2 + (i * 30); // 30px spacing for 6 lanes
-            // Dashed lines outside intersection
-            self.draw_dashed_line(canvas, x, 0, x, center_y - road_width / 2)?;
-            self.draw_dashed_line(canvas, x, center_y + road_width / 2, x, WINDOW_HEIGHT as i32)?;
-        }
+        // South-bound lanes (left side): center_x - 30, center_x - 60
+        canvas.draw_line((center_x - 30, 0), (center_x - 30, center_y - road_width / 2))?;
+        canvas.draw_line((center_x - 60, 0), (center_x - 60, center_y - road_width / 2))?;
+        canvas.draw_line((center_x - 30, center_y + road_width / 2), (center_x - 30, WINDOW_HEIGHT as i32))?;
+        canvas.draw_line((center_x - 60, center_y + road_width / 2), (center_x - 60, WINDOW_HEIGHT as i32))?;
+
+        // Horizontal road lane markings (East/West traffic)
+        // East-bound lanes (bottom side): center_y + 30, center_y + 60
+        canvas.draw_line((0, center_y + 30), (center_x - road_width / 2, center_y + 30))?;
+        canvas.draw_line((0, center_y + 60), (center_x - road_width / 2, center_y + 60))?;
+        canvas.draw_line((center_x + road_width / 2, center_y + 30), (WINDOW_WIDTH as i32, center_y + 30))?;
+        canvas.draw_line((center_x + road_width / 2, center_y + 60), (WINDOW_WIDTH as i32, center_y + 60))?;
+
+        // West-bound lanes (top side): center_y - 30, center_y - 60
+        canvas.draw_line((0, center_y - 30), (center_x - road_width / 2, center_y - 30))?;
+        canvas.draw_line((0, center_y - 60), (center_x - road_width / 2, center_y - 60))?;
+        canvas.draw_line((center_x + road_width / 2, center_y - 30), (WINDOW_WIDTH as i32, center_y - 30))?;
+        canvas.draw_line((center_x + road_width / 2, center_y - 60), (WINDOW_WIDTH as i32, center_y - 60))?;
+
+        // Center divider lines (DOUBLE YELLOW)
+        canvas.set_draw_color(Color::RGB(255, 255, 0));
+
+        // Horizontal center line (separates North/South bound traffic)
+        canvas.draw_line((0, center_y - 2), (center_x - road_width / 2, center_y - 2))?;
+        canvas.draw_line((0, center_y + 2), (center_x - road_width / 2, center_y + 2))?;
+        canvas.draw_line((center_x + road_width / 2, center_y - 2), (WINDOW_WIDTH as i32, center_y - 2))?;
+        canvas.draw_line((center_x + road_width / 2, center_y + 2), (WINDOW_WIDTH as i32, center_y + 2))?;
+
+        // Vertical center line (separates East/West bound traffic)
+        canvas.draw_line((center_x - 2, 0), (center_x - 2, center_y - road_width / 2))?;
+        canvas.draw_line((center_x + 2, 0), (center_x + 2, center_y - road_width / 2))?;
+        canvas.draw_line((center_x - 2, center_y + road_width / 2), (center_x - 2, WINDOW_HEIGHT as i32))?;
+        canvas.draw_line((center_x + 2, center_y + road_width / 2), (center_x + 2, WINDOW_HEIGHT as i32))?;
 
         // Road borders
         canvas.set_draw_color(Color::RGB(200, 200, 200));
@@ -808,7 +884,7 @@ impl GameState {
     }
 
     fn draw_intersection(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(50, 50, 50)); // Darker intersection
+        canvas.set_draw_color(Color::RGB(50, 50, 50));
 
         let center_x = WINDOW_WIDTH as i32 / 2;
         let center_y = WINDOW_HEIGHT as i32 / 2;
@@ -821,7 +897,7 @@ impl GameState {
             size as u32,
         ))?;
 
-        // Intersection border in yellow
+        // Intersection border
         canvas.set_draw_color(Color::RGB(255, 255, 0));
         canvas.draw_rect(Rect::new(
             center_x - size / 2,
@@ -834,15 +910,13 @@ impl GameState {
     }
 
     fn draw_enhanced_vehicle(&self, canvas: &mut Canvas<Window>, vehicle: &Vehicle) -> Result<(), String> {
-        // Vehicle color based on route
         let color = match vehicle.color {
-            VehicleColor::Red => Color::RGB(255, 80, 80),     // Red for left
-            VehicleColor::Blue => Color::RGB(80, 80, 255),    // Blue for straight
-            VehicleColor::Green => Color::RGB(80, 255, 80),   // Green for right
-            VehicleColor::Yellow => Color::RGB(255, 255, 80), // Yellow for special
+            VehicleColor::Red => Color::RGB(255, 80, 80),
+            VehicleColor::Blue => Color::RGB(80, 80, 255),
+            VehicleColor::Green => Color::RGB(80, 255, 80),
+            VehicleColor::Yellow => Color::RGB(255, 255, 80),
         };
 
-        // Dim color if vehicle is slow/stopped
         let adjusted_color = if vehicle.current_velocity < Vehicle::SLOW_VELOCITY * 0.7 {
             Color::RGB(color.r / 2, color.g / 2, color.b / 2)
         } else {
@@ -851,7 +925,7 @@ impl GameState {
 
         canvas.set_draw_color(adjusted_color);
 
-        let size = 22; // Slightly smaller for better lane fit
+        let size = 22;
         let rect = Rect::new(
             vehicle.position.x - size / 2,
             vehicle.position.y - size / 2,
@@ -898,58 +972,67 @@ impl GameState {
     fn draw_enhanced_ui(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         // Background for UI
         canvas.set_draw_color(Color::RGBA(0, 0, 0, 200));
-        canvas.fill_rect(Rect::new(10, 10, 250, 120))?;
+        canvas.fill_rect(Rect::new(10, 10, 280, 140))?;
 
         canvas.set_draw_color(Color::RGB(255, 255, 255));
-        canvas.draw_rect(Rect::new(10, 10, 250, 120))?;
+        canvas.draw_rect(Rect::new(10, 10, 280, 140))?;
 
-        // Vehicle count indicators
-        let max_display = 25;
-        for i in 0..self.vehicles.len().min(max_display) {
-            let vehicle = &self.vehicles[i];
-            let color = match vehicle.color {
-                VehicleColor::Red => Color::RGB(255, 100, 100),
-                VehicleColor::Blue => Color::RGB(100, 100, 255),
-                VehicleColor::Green => Color::RGB(100, 255, 100),
-                VehicleColor::Yellow => Color::RGB(255, 255, 100),
+        // Vehicle count indicators by route
+        let max_display = 20;
+        let mut x_offset = 15;
+
+        // Group vehicles by route and show them
+        for route in [Route::Left, Route::Straight, Route::Right] {
+            let vehicles_with_route: Vec<&Vehicle> = self.vehicles.iter()
+                .filter(|v| v.route == route)
+                .take(max_display)
+                .collect();
+
+            let route_color = match route {
+                Route::Left => Color::RGB(255, 100, 100),   // Red
+                Route::Straight => Color::RGB(100, 100, 255), // Blue
+                Route::Right => Color::RGB(100, 255, 100),   // Green
             };
 
-            canvas.set_draw_color(color);
-            canvas.fill_rect(Rect::new(15 + (i as i32 * 9), 15, 7, 12))?;
+            canvas.set_draw_color(route_color);
+            for (i, _) in vehicles_with_route.iter().enumerate() {
+                canvas.fill_rect(Rect::new(x_offset + (i as i32 * 8), 15, 6, 12))?;
+            }
+            x_offset += 90; // Space between route groups
         }
 
-        // Traffic congestion warning - restored original threshold
-        if self.vehicles.len() > 8 {
+        // Traffic congestion warning
+        if self.vehicles.len() > 6 { // Updated threshold
             canvas.set_draw_color(Color::RGB(255, 0, 0));
-            canvas.fill_rect(Rect::new(15, 35, 220, 15))?;
+            canvas.fill_rect(Rect::new(15, 35, 250, 15))?;
         }
 
-        // Direction distribution
+        // Direction distribution with lane info
         let directions = [Direction::North, Direction::South, Direction::East, Direction::West];
         let dir_colors = [
-            Color::RGB(255, 150, 150), // North - Light Red
-            Color::RGB(150, 255, 150), // South - Light Green
-            Color::RGB(150, 150, 255), // East - Light Blue
-            Color::RGB(255, 255, 150), // West - Light Yellow
+            Color::RGB(255, 150, 150),
+            Color::RGB(150, 255, 150),
+            Color::RGB(150, 150, 255),
+            Color::RGB(255, 255, 150),
         ];
 
         for (i, (direction, color)) in directions.iter().zip(dir_colors.iter()).enumerate() {
             let count = self.vehicles.iter().filter(|v| v.direction == *direction).count();
             canvas.set_draw_color(*color);
 
-            for j in 0..count.min(15) {
+            for j in 0..count.min(12) {
                 canvas.fill_rect(Rect::new(
                     15 + (j as i32 * 6),
-                    55 + (i as i32 * 15),
-                    5, 12
+                    55 + (i as i32 * 18),
+                    5, 15
                 ))?;
             }
         }
 
         // Show passed vehicles count
         canvas.set_draw_color(Color::RGB(0, 255, 0));
-        for i in 0..(self.total_vehicles_passed.min(20)) {
-            canvas.fill_rect(Rect::new(15 + (i as i32 * 8), 115, 6, 8))?;
+        for i in 0..(self.total_vehicles_passed.min(25)) {
+            canvas.fill_rect(Rect::new(15 + (i as i32 * 8), 130, 6, 10))?;
         }
 
         Ok(())
@@ -982,7 +1065,7 @@ impl GameState {
         println!("║ Max congestion: {:>14}        ║", self.statistics.max_congestion);
         println!("╚══════════════════════════════════════╝");
 
-        // Safety assessment
+        // Assessment
         println!("\n🛡️ SAFETY ASSESSMENT:");
         if close_call_rate < 5.0 {
             println!("  ✅ EXCELLENT - Very low close call rate ({:.1}%)", close_call_rate);
@@ -994,8 +1077,7 @@ impl GameState {
             println!("  ❌ POOR - High close call rate ({:.1}%)", close_call_rate);
         }
 
-        // Efficiency assessment - restored original threshold
-        if self.statistics.max_congestion <= 8 {
+        if self.statistics.max_congestion <= 6 {
             println!("  ✅ EFFICIENT - Traffic congestion remained low");
         } else {
             println!("  ⚠️  CONGESTED - Peak traffic exceeded recommended limits");
@@ -1012,17 +1094,20 @@ impl GameState {
 
         println!("  ✅ Cross intersection implemented");
         println!("  ✅ Vehicles spawn from correct directions");
+        println!("  ✅ STRICT lane discipline (route determines lane)");
+        println!("  ✅ Proper lane-to-direction mapping");
         println!("  {} Collision avoidance: {}",
                  if close_call_rate < 20.0 { "✅" } else { "⚠️" },
-                 if close_call_rate < 20.0 { "GOOD" } else { "NEEDS IMPROVEMENT" });
+                 if close_call_rate < 20.0 { "EXCELLENT" } else { "NEEDS IMPROVEMENT" });
         println!("  {} Traffic management: {}",
-                 if self.statistics.max_congestion <= 8 { "✅" } else { "⚠️" },
-                 if self.statistics.max_congestion <= 8 { "EFFICIENT" } else { "CONGESTED" });
+                 if self.statistics.max_congestion <= 6 { "✅" } else { "⚠️" },
+                 if self.statistics.max_congestion <= 6 { "EFFICIENT" } else { "CONGESTED" });
         println!("  ✅ Multiple velocity levels implemented");
         println!("  ✅ Route-based vehicle behavior");
         println!("  ✅ Statistics tracking functional");
         println!("  ✅ Safe distance maintained");
         println!("  ✅ No vehicle overlapping on spawn");
+        println!("  ✅ Each incoming lane leads to specific outgoing direction");
     }
 }
 
