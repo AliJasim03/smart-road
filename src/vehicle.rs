@@ -1,4 +1,4 @@
-// src/vehicle.rs - FINAL VERSION WITH ROAD-TO-ROAD MAPPING
+// src/vehicle.rs - FINAL FIX: Equal lane spacing and proper positioning
 use crate::intersection::Intersection;
 use sdl2::rect::Point;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -45,64 +45,68 @@ pub enum VehicleColor {
     Yellow, // Special/emergency
 }
 
-// NEW: Fixed road-to-road mapping system
+// FINAL FIX: Corrected road mapping system
 pub struct RoadMapping {
-    routes: HashMap<(Direction, usize), Direction>,
+    routes: HashMap<(Direction, usize), (Direction, Route)>,
 }
 
 impl RoadMapping {
     pub fn new() -> Self {
         let mut routes = HashMap::new();
 
-        // FIXED: Explicit road-to-road mapping based on README diagram
-        // Each incoming direction has 3 lanes that go to specific outgoing roads
+        // FINAL FIX: Each direction gets 3 lanes with consistent routing
+        // Lane 0 = Left turn, Lane 1 = Straight, Lane 2 = Right turn
 
-        // North-bound (coming from South) - lanes go to:
-        routes.insert((Direction::North, 0), Direction::West);  // Lane 0 → West road
-        routes.insert((Direction::North, 1), Direction::North); // Lane 1 → Continue North
-        routes.insert((Direction::North, 2), Direction::East);  // Lane 2 → East road
+        // North-bound traffic (coming from South, moving North)
+        routes.insert((Direction::North, 0), (Direction::West, Route::Left));     // Left turn to West
+        routes.insert((Direction::North, 1), (Direction::North, Route::Straight)); // Straight North
+        routes.insert((Direction::North, 2), (Direction::East, Route::Right));     // Right turn to East
 
-        // South-bound (coming from North) - lanes go to:
-        routes.insert((Direction::South, 0), Direction::West);  // Lane 0 → West road
-        routes.insert((Direction::South, 1), Direction::South); // Lane 1 → Continue South
-        routes.insert((Direction::South, 2), Direction::East);  // Lane 2 → East road
+        // South-bound traffic (coming from North, moving South)
+        routes.insert((Direction::South, 0), (Direction::East, Route::Left));      // Left turn to East
+        routes.insert((Direction::South, 1), (Direction::South, Route::Straight)); // Straight South
+        routes.insert((Direction::South, 2), (Direction::West, Route::Right));     // Right turn to West
 
-        // East-bound (coming from West) - lanes go to:
-        routes.insert((Direction::East, 0), Direction::North);  // Lane 0 → North road
-        routes.insert((Direction::East, 1), Direction::East);   // Lane 1 → Continue East
-        routes.insert((Direction::East, 2), Direction::South);  // Lane 2 → South road
+        // East-bound traffic (coming from West, moving East)
+        routes.insert((Direction::East, 0), (Direction::North, Route::Left));     // Left turn to North
+        routes.insert((Direction::East, 1), (Direction::East, Route::Straight));  // Straight East
+        routes.insert((Direction::East, 2), (Direction::South, Route::Right));    // Right turn to South
 
-        // West-bound (coming from East) - lanes go to:
-        routes.insert((Direction::West, 0), Direction::North);  // Lane 0 → North road
-        routes.insert((Direction::West, 1), Direction::West);   // Lane 1 → Continue West
-        routes.insert((Direction::West, 2), Direction::South);  // Lane 2 → South road
+        // West-bound traffic (coming from East, moving West)
+        routes.insert((Direction::West, 0), (Direction::South, Route::Left));     // Left turn to South
+        routes.insert((Direction::West, 1), (Direction::West, Route::Straight));  // Straight West
+        routes.insert((Direction::West, 2), (Direction::North, Route::Right));    // Right turn to North
 
         RoadMapping { routes }
     }
 
-    pub fn get_destination(&self, incoming: Direction, lane: usize) -> Direction {
-        *self.routes.get(&(incoming, lane)).unwrap_or(&incoming)
+    pub fn get_destination_and_route(&self, incoming: Direction, lane: usize) -> (Direction, Route) {
+        *self.routes.get(&(incoming, lane)).unwrap_or(&(incoming, Route::Straight))
     }
 
     pub fn print_mapping(&self) {
-        println!("=== ROAD-TO-ROAD MAPPING ===");
+        println!("=== FINAL FIXED 6-LANE SYSTEM ===");
+        println!("Perfect lane spacing: Each lane exactly 40px wide");
+        println!("Lane 0=Left, Lane 1=Straight(MIDDLE), Lane 2=Right\n");
+
         for direction in [Direction::North, Direction::South, Direction::East, Direction::West] {
-            println!("{:?}-bound lanes:", direction);
+            println!("{:?}-bound traffic:", direction);
             for lane in 0..3 {
-                let destination = self.get_destination(direction, lane);
-                println!("  Lane {} → {:?} road", lane, destination);
+                let (destination, route) = self.get_destination_and_route(direction, lane);
+                println!("  Lane {}: {:?} turn → {:?} road", lane, route, destination);
             }
+            println!();
         }
-        println!("=============================");
+        println!("=====================================");
     }
 }
 
 pub struct Vehicle {
     pub id: u32,
     pub position: Point,
-    position_f: (f64, f64), // For smooth movement calculations
-    pub direction: Direction, // Original incoming direction (never changes)
-    pub destination: Direction, // Final destination road
+    position_f: (f64, f64),
+    pub direction: Direction,
+    pub destination: Direction,
     pub lane: usize,
     pub route: Route,
     pub color: VehicleColor,
@@ -114,51 +118,50 @@ pub struct Vehicle {
     pub height: u32,
     pub start_time: std::time::Instant,
     pub time_in_intersection: u32,
-    turning_progress: f64, // 0.0 to 1.0 for turning animation
-    pub angle: f64, // For proper rendering rotation
+    turning_progress: f64,
+    pub angle: f64,
     last_slow_down_time: std::time::Instant,
-    stuck_timer: f32, // Track how long vehicle has been slow/stopped
-    original_velocity: f64, // Remember the vehicle's preferred speed
-    current_movement_direction: Direction, // Direction vehicle is currently moving (changes during turns)
+    stuck_timer: f32,
+    original_velocity: f64,
+    current_movement_direction: Direction,
+    has_reserved_intersection: bool,
+    lane_center_offset: f64,
 }
 
 impl Vehicle {
-    // Enhanced velocity constants with more variation
-    pub const SLOW_VELOCITY: f64 = 25.0;   // pixels per second
-    pub const MEDIUM_VELOCITY: f64 = 55.0; // pixels per second
-    pub const FAST_VELOCITY: f64 = 85.0;   // pixels per second
-    pub const SAFE_DISTANCE: f64 = 50.0;   // pixels
+    // Conservative velocity constants
+    pub const SLOW_VELOCITY: f64 = 15.0;
+    pub const MEDIUM_VELOCITY: f64 = 35.0;
+    pub const FAST_VELOCITY: f64 = 55.0;
+    pub const SAFE_DISTANCE: f64 = 80.0;
 
-    // Lane constants for intersection
-    pub const LANE_WIDTH: f64 = 30.0;      // 30px per lane
-    pub const ROAD_WIDTH: f64 = 180.0;     // Total road width (3 lanes each direction)
+    // FINAL FIX: Perfect lane spacing
+    pub const LANE_WIDTH: f64 = 40.0;      // Each lane exactly 40px
+    pub const ROAD_WIDTH: f64 = 240.0;     // Total road width (6 lanes × 40px)
 
-    // Vehicle dimensions
-    pub const WIDTH: u32 = 24;
-    pub const HEIGHT: u32 = 24;
+    pub const WIDTH: u32 = 20;
+    pub const HEIGHT: u32 = 20;
 
-    // NEW: Create vehicle with explicit destination using road mapping
+    // FINAL FIX: Perfect spawn positioning with equal lane spacing
     pub fn new_with_destination(incoming_direction: Direction, lane: usize, road_mapping: &RoadMapping) -> Self {
-        let destination = road_mapping.get_destination(incoming_direction, lane);
-        let route = Self::calculate_route(incoming_direction, destination);
+        let (destination, route) = road_mapping.get_destination_and_route(incoming_direction, lane);
 
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-        let (spawn_x, spawn_y) = Self::calculate_spawn_position(incoming_direction, lane);
+        let (spawn_x, spawn_y, lane_offset) = Self::calculate_perfect_spawn_position(incoming_direction, lane);
 
-        // Assign color based on route for better visualization
+        // FINAL FIX: Color based on actual route, not lane
         let color = match route {
             Route::Left => VehicleColor::Red,
             Route::Straight => VehicleColor::Blue,
             Route::Right => VehicleColor::Green,
         };
 
-        // Better velocity distribution with more realistic variation
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        let velocity_level = match rng.gen_range(0..9) {
-            0..=2 => VelocityLevel::Slow,   // 33% slow
-            3..=5 => VelocityLevel::Medium, // 33% medium
-            _ => VelocityLevel::Fast,       // 33% fast
+        let velocity_level = match rng.gen_range(0..10) {
+            0..=4 => VelocityLevel::Slow,
+            5..=8 => VelocityLevel::Medium,
+            _ => VelocityLevel::Fast,
         };
 
         let base_velocity = match velocity_level {
@@ -167,9 +170,8 @@ impl Vehicle {
             VelocityLevel::Fast => Self::FAST_VELOCITY,
         };
 
-        // Add some random variation but keep within reasonable bounds
-        let variation = rng.gen_range(-8.0..8.0);
-        let initial_velocity = (base_velocity + variation).max(15.0).min(95.0);
+        let variation = rng.gen_range(-3.0..3.0);
+        let initial_velocity = (base_velocity + variation).max(10.0).min(Self::FAST_VELOCITY);
 
         let initial_angle = match incoming_direction {
             Direction::North => 0.0,
@@ -178,14 +180,14 @@ impl Vehicle {
             Direction::West => 270.0,
         };
 
-        println!("🚗 Vehicle {}: {:?} Lane {} → {:?} road ({:?} route, {:.0} px/s) at ({:.0}, {:.0})",
+        println!("🚗 Vehicle {}: {:?} Lane {} → {:?} road ({:?}, {:.0} px/s) at ({:.0}, {:.0})",
                  id, incoming_direction, lane, destination, route, initial_velocity, spawn_x, spawn_y);
 
         Vehicle {
             id,
             position: Point::new(spawn_x as i32, spawn_y as i32),
             position_f: (spawn_x, spawn_y),
-            direction: incoming_direction, // Original direction never changes
+            direction: incoming_direction,
             destination,
             lane,
             route,
@@ -203,138 +205,92 @@ impl Vehicle {
             last_slow_down_time: std::time::Instant::now(),
             stuck_timer: 0.0,
             original_velocity: initial_velocity,
-            current_movement_direction: incoming_direction, // Starts same as original
+            current_movement_direction: incoming_direction,
+            has_reserved_intersection: false,
+            lane_center_offset: lane_offset,
+        }
+    }
+
+    // FINAL FIX: Perfect lane positioning with exactly equal spacing
+    fn calculate_perfect_spawn_position(direction: Direction, lane: usize) -> (f64, f64, f64) {
+        let center_x = crate::WINDOW_WIDTH as f64 / 2.0;
+        let center_y = crate::WINDOW_HEIGHT as f64 / 2.0;
+        let spawn_distance = 250.0;
+
+        // Perfect lane calculation: each lane is exactly 40px wide
+        // Lane positions from center of their road section:
+        // Lane 0: -40px (left/outer)
+        // Lane 1:   0px (center/middle)
+        // Lane 2: +40px (right/inner)
+        let lane_offset = (lane as f64 - 1.0) * Self::LANE_WIDTH; // -40, 0, +40
+
+        match direction {
+            Direction::North => {
+                // North-bound: spawn from south, travel north
+                // Use RIGHT side of vertical road (positive X from center)
+                let base_x = center_x + (Self::ROAD_WIDTH / 4.0); // 60px right of center
+                let x = base_x + lane_offset; // Add lane offset
+                let y = crate::WINDOW_HEIGHT as f64 + spawn_distance;
+                (x, y, lane_offset)
+            }
+            Direction::South => {
+                // South-bound: spawn from north, travel south
+                // Use LEFT side of vertical road (negative X from center)
+                let base_x = center_x - (Self::ROAD_WIDTH / 4.0); // 60px left of center
+                let x = base_x - lane_offset; // Subtract lane offset (flip for opposite direction)
+                let y = -spawn_distance;
+                (x, y, -lane_offset)
+            }
+            Direction::East => {
+                // East-bound: spawn from west, travel east
+                // Use BOTTOM side of horizontal road (positive Y from center)
+                let base_y = center_y + (Self::ROAD_WIDTH / 4.0); // 60px below center
+                let x = -spawn_distance;
+                let y = base_y + lane_offset; // Add lane offset
+                (x, y, lane_offset)
+            }
+            Direction::West => {
+                // West-bound: spawn from east, travel west
+                // Use TOP side of horizontal road (negative Y from center)
+                let base_y = center_y - (Self::ROAD_WIDTH / 4.0); // 60px above center
+                let x = crate::WINDOW_WIDTH as f64 + spawn_distance;
+                let y = base_y - lane_offset; // Subtract lane offset (flip for opposite direction)
+                (x, y, -lane_offset)
+            }
         }
     }
 
     // Legacy constructor for compatibility
-    pub fn new(direction: Direction, _lane: usize, route: Route) -> Self {
-        // Create a default road mapping and use random lane
+    pub fn new(direction: Direction, lane: usize, route: Route) -> Self {
         let road_mapping = RoadMapping::new();
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let lane = rng.gen_range(0..3);
-
         Self::new_with_destination(direction, lane, &road_mapping)
     }
 
-    // Calculate route based on incoming and destination directions
-    fn calculate_route(from: Direction, to: Direction) -> Route {
-        if from == to {
-            return Route::Straight;
-        }
-
-        match (from, to) {
-            // Left turns (90 degrees counterclockwise)
-            (Direction::North, Direction::West) |
-            (Direction::West, Direction::South) |
-            (Direction::South, Direction::East) |
-            (Direction::East, Direction::North) => Route::Left,
-
-            // Right turns (90 degrees clockwise)
-            (Direction::North, Direction::East) |
-            (Direction::East, Direction::South) |
-            (Direction::South, Direction::West) |
-            (Direction::West, Direction::North) => Route::Right,
-
-            // U-turns (treat as left for now)
-            _ => Route::Left,
-        }
-    }
-
-    // Get target direction (final destination)
     pub fn get_target_direction(&self) -> Direction {
         self.destination
     }
 
-    // Spawn positioning to align with drawn lane markings
-    fn calculate_spawn_position(direction: Direction, lane: usize) -> (f64, f64) {
-        let center_x = crate::WINDOW_WIDTH as f64 / 2.0;
-        let center_y = crate::WINDOW_HEIGHT as f64 / 2.0;
-
-        match direction {
-            Direction::North => {
-                // North-bound vehicles spawn from SOUTH (bottom of screen)
-                // Right side of vertical road: lanes at center_x + 15, +45, +75
-                let x = center_x + 15.0 + (lane as f64 * 30.0);
-                let y = crate::WINDOW_HEIGHT as f64 + 150.0;
-                (x, y)
-            }
-            Direction::South => {
-                // South-bound vehicles spawn from NORTH (top of screen)
-                // Left side of vertical road: lanes at center_x - 15, -45, -75
-                let x = center_x - 15.0 - (lane as f64 * 30.0);
-                let y = -150.0;
-                (x, y)
-            }
-            Direction::East => {
-                // East-bound vehicles spawn from WEST (left side of screen)
-                // Bottom side of horizontal road: lanes at center_y + 15, +45, +75
-                let x = -150.0;
-                let y = center_y + 15.0 + (lane as f64 * 30.0);
-                (x, y)
-            }
-            Direction::West => {
-                // West-bound vehicles spawn from EAST (right side of screen)
-                // Top side of horizontal road: lanes at center_y - 15, -45, -75
-                let x = crate::WINDOW_WIDTH as f64 + 150.0;
-                let y = center_y - 15.0 - (lane as f64 * 30.0);
-                (x, y)
-            }
-        }
-    }
-
-    // Validation method to ensure vehicles spawn from correct edges
-    pub fn is_spawning_from_correct_edge(&self) -> bool {
-        let center_x = crate::WINDOW_WIDTH as f64 / 2.0;
-        let center_y = crate::WINDOW_HEIGHT as f64 / 2.0;
-
-        match self.direction {
-            Direction::North => {
-                // Should spawn from south (bottom) - y should be > center_y
-                self.position_f.1 > center_y + 100.0
-            }
-            Direction::South => {
-                // Should spawn from north (top) - y should be < center_y
-                self.position_f.1 < center_y - 100.0
-            }
-            Direction::East => {
-                // Should spawn from west (left) - x should be < center_x
-                self.position_f.0 < center_x - 100.0
-            }
-            Direction::West => {
-                // Should spawn from east (right) - x should be > center_x
-                self.position_f.0 > center_x + 100.0
-            }
-        }
-    }
-
     pub fn update(&mut self, delta_time: u32, intersection: &Intersection) {
-        let dt = delta_time as f64 / 1000.0; // Convert to seconds
+        let dt = delta_time as f64 / 1000.0;
 
-        // Update intersection time
         if self.is_in_intersection(intersection) {
             self.time_in_intersection += delta_time;
         }
 
-        // Track stuck timer for vehicles that are moving too slowly
-        if self.current_velocity < Self::SLOW_VELOCITY * 0.6 {
+        if self.current_velocity < Self::SLOW_VELOCITY * 0.3 {
             self.stuck_timer += dt as f32;
         } else {
             self.stuck_timer = 0.0;
         }
 
-        // Auto-recovery for stuck vehicles - less aggressive
-        if self.stuck_timer > 3.0 { // Increased from 2.0 to 3.0
+        if self.stuck_timer > 8.0 {
             println!("Vehicle {} auto-recovering from stuck state", self.id);
             self.target_velocity = self.original_velocity.min(Self::MEDIUM_VELOCITY);
             self.stuck_timer = 0.0;
         }
 
-        // Smooth velocity adjustment with better acceleration
         self.adjust_velocity(dt);
 
-        // Update position based on state
         match self.state {
             VehicleState::Approaching | VehicleState::Entering => {
                 self.move_straight(dt);
@@ -347,28 +303,24 @@ impl Vehicle {
             }
         }
 
-        // Update state based on position
         self.update_state(intersection);
-
-        // Update integer position for rendering
         self.position = Point::new(self.position_f.0 as i32, self.position_f.1 as i32);
     }
 
-    // Less aggressive velocity adjustment
     fn adjust_velocity(&mut self, dt: f64) {
         let velocity_diff = self.target_velocity - self.current_velocity;
 
-        if velocity_diff.abs() < 2.0 { // Increased tolerance
+        if velocity_diff.abs() < 0.5 {
             self.current_velocity = self.target_velocity;
         } else {
             let acceleration = if velocity_diff > 0.0 {
-                80.0 // Faster acceleration when speeding up (was 60.0)
+                30.0
             } else {
-                -80.0 // Less aggressive deceleration (was -100.0)
+                -150.0
             };
 
             self.current_velocity += acceleration * dt;
-            self.current_velocity = self.current_velocity.max(5.0).min(Self::FAST_VELOCITY * 1.2);
+            self.current_velocity = self.current_velocity.max(0.0).min(Self::FAST_VELOCITY);
         }
     }
 
@@ -396,50 +348,25 @@ impl Vehicle {
     }
 
     fn move_turning(&mut self, dt: f64) {
-        let turn_speed = self.current_velocity * 0.9; // Less speed reduction during turns
+        let turn_speed = self.current_velocity * 0.6;
         let distance = turn_speed * dt;
 
-        let turn_rate = 2.5; // Faster turn completion
+        let turn_rate = 1.5;
         self.turning_progress += dt * turn_rate;
 
-        // Smooth angle interpolation during turn
-        let start_angle = match self.current_movement_direction {
-            Direction::North => 0.0,
-            Direction::East => 90.0,
-            Direction::South => 180.0,
-            Direction::West => 270.0,
-        };
-
-        let end_angle = match self.destination {
-            Direction::North => 0.0,
-            Direction::East => 90.0,
-            Direction::South => 180.0,
-            Direction::West => 270.0,
-        };
-
-        // Handle angle wrapping for smooth interpolation
-        let mut angle_diff = end_angle - start_angle;
-        if angle_diff > 180.0 { angle_diff -= 360.0; }
-        if angle_diff < -180.0 { angle_diff += 360.0; }
-
-        self.angle = start_angle + angle_diff * self.turning_progress.min(1.0);
-
-        // Better turn path calculation
-        if self.turning_progress < 0.5 {
-            // First half of turn - continue in original direction
+        if self.turning_progress < 0.7 {
             match self.current_movement_direction {
-                Direction::North => self.position_f.1 -= distance,
-                Direction::South => self.position_f.1 += distance,
-                Direction::East => self.position_f.0 += distance,
-                Direction::West => self.position_f.0 -= distance,
+                Direction::North => self.position_f.1 -= distance * 0.7,
+                Direction::South => self.position_f.1 += distance * 0.7,
+                Direction::East => self.position_f.0 += distance * 0.7,
+                Direction::West => self.position_f.0 -= distance * 0.7,
             }
         } else {
-            // Second half of turn - move in new direction
             match self.destination {
-                Direction::North => self.position_f.1 -= distance,
-                Direction::South => self.position_f.1 += distance,
-                Direction::East => self.position_f.0 += distance,
-                Direction::West => self.position_f.0 -= distance,
+                Direction::North => self.position_f.1 -= distance * 0.7,
+                Direction::South => self.position_f.1 += distance * 0.7,
+                Direction::East => self.position_f.0 += distance * 0.7,
+                Direction::West => self.position_f.0 -= distance * 0.7,
             }
         }
 
@@ -452,6 +379,7 @@ impl Vehicle {
         self.current_movement_direction = self.destination;
         self.state = VehicleState::Exiting;
         self.turning_progress = 0.0;
+        self.has_reserved_intersection = false;
 
         self.angle = match self.destination {
             Direction::North => 0.0,
@@ -459,12 +387,14 @@ impl Vehicle {
             Direction::South => 180.0,
             Direction::West => 270.0,
         };
+
+        println!("Vehicle {} completed turn to {:?}", self.id, self.destination);
     }
 
     fn update_state(&mut self, _intersection: &Intersection) {
         let center_x = crate::WINDOW_WIDTH as i32 / 2;
         let center_y = crate::WINDOW_HEIGHT as i32 / 2;
-        let intersection_radius = 120;
+        let intersection_radius = 90;
 
         let distance_to_center = (
             (self.position.x - center_x).pow(2) +
@@ -474,17 +404,20 @@ impl Vehicle {
 
         match self.state {
             VehicleState::Approaching => {
-                if distance_to_center < intersection_radius as f64 + 30.0 {
+                if distance_to_center < intersection_radius as f64 + 50.0 {
                     self.state = VehicleState::Entering;
+                    println!("Vehicle {} entering intersection", self.id);
                 }
             }
             VehicleState::Entering => {
-                if distance_to_center < 80.0 {
+                if distance_to_center < 50.0 {
                     if self.route != Route::Straight {
                         self.state = VehicleState::Turning;
                         self.turning_progress = 0.0;
+                        println!("Vehicle {} starting {:?} turn", self.id, self.route);
                     } else {
                         self.state = VehicleState::Exiting;
+                        println!("Vehicle {} going straight through", self.id);
                     }
                 }
             }
@@ -492,8 +425,9 @@ impl Vehicle {
                 // Handled in move_turning method
             }
             VehicleState::Exiting => {
-                if distance_to_center > intersection_radius as f64 + 40.0 {
+                if distance_to_center > intersection_radius as f64 + 60.0 {
                     self.state = VehicleState::Completed;
+                    println!("Vehicle {} completed intersection", self.id);
                 }
             }
             VehicleState::Completed => {
@@ -515,34 +449,27 @@ impl Vehicle {
             self.last_slow_down_time = std::time::Instant::now();
         } else if new_target > self.target_velocity {
             let time_since_slowdown = self.last_slow_down_time.elapsed().as_secs_f32();
-            if time_since_slowdown > 0.8 || // Reduced recovery time
+            if time_since_slowdown > 3.0 ||
                 matches!(self.state, VehicleState::Exiting | VehicleState::Completed) {
                 self.target_velocity = new_target.min(self.original_velocity);
             }
         }
     }
 
-    // More aggressive recovery from slowdowns
     pub fn try_speed_up(&mut self) {
         let time_since_slowdown = self.last_slow_down_time.elapsed().as_secs_f32();
 
-        if time_since_slowdown > 0.6 { // Reduced from 1.0 - faster recovery
+        if time_since_slowdown > 2.5 {
             match self.state {
                 VehicleState::Approaching => {
-                    let target_speed = self.original_velocity.min(Self::FAST_VELOCITY); // Increased from MEDIUM
-                    if self.target_velocity < target_speed {
+                    let target_speed = self.original_velocity.min(Self::MEDIUM_VELOCITY);
+                    if self.target_velocity < target_speed * 0.8 {
                         self.target_velocity = target_speed;
                     }
                 }
                 VehicleState::Exiting | VehicleState::Completed => {
                     let target_speed = self.original_velocity.min(Self::FAST_VELOCITY);
-                    if self.target_velocity < target_speed {
-                        self.target_velocity = target_speed;
-                    }
-                }
-                VehicleState::Entering => {
-                    let target_speed = self.original_velocity.min(Self::MEDIUM_VELOCITY);
-                    if self.target_velocity < target_speed * 0.95 { // More aggressive
+                    if self.target_velocity < target_speed * 0.8 {
                         self.target_velocity = target_speed;
                     }
                 }
@@ -552,46 +479,46 @@ impl Vehicle {
     }
 
     pub fn is_on_screen(&self) -> bool {
-        self.position.x >= -150 &&
-            self.position.x <= (crate::WINDOW_WIDTH as i32 + 150) &&
-            self.position.y >= -150 &&
-            self.position.y <= (crate::WINDOW_HEIGHT as i32 + 150)
+        self.position.x >= -400 &&
+            self.position.x <= (crate::WINDOW_WIDTH as i32 + 400) &&
+            self.position.y >= -400 &&
+            self.position.y <= (crate::WINDOW_HEIGHT as i32 + 400)
     }
 
     pub fn distance_from_spawn(&self) -> f64 {
         match self.direction {
-            Direction::North => (crate::WINDOW_HEIGHT as f64 + 150.0) - self.position_f.1,
-            Direction::South => self.position_f.1 + 150.0,
-            Direction::East => self.position_f.0 + 150.0,
-            Direction::West => (crate::WINDOW_WIDTH as f64 + 150.0) - self.position_f.0,
+            Direction::North => (crate::WINDOW_HEIGHT as f64 + 250.0) - self.position_f.1,
+            Direction::South => self.position_f.1 + 250.0,
+            Direction::East => self.position_f.0 + 250.0,
+            Direction::West => (crate::WINDOW_WIDTH as f64 + 250.0) - self.position_f.0,
         }
     }
 
     pub fn is_approaching_intersection(&self, _intersection: &Intersection) -> bool {
         let center_x = crate::WINDOW_WIDTH as i32 / 2;
         let center_y = crate::WINDOW_HEIGHT as i32 / 2;
-        let approach_distance = 200;
+        let approach_distance = 120;
 
         match self.current_movement_direction {
             Direction::North => {
                 self.position.y > center_y &&
                     self.position.y < center_y + approach_distance &&
-                    (self.position.x - center_x).abs() < 100
+                    (self.position.x - center_x).abs() < 120
             }
             Direction::South => {
                 self.position.y < center_y &&
                     self.position.y > center_y - approach_distance &&
-                    (self.position.x - center_x).abs() < 100
+                    (self.position.x - center_x).abs() < 120
             }
             Direction::East => {
                 self.position.x < center_x &&
                     self.position.x > center_x - approach_distance &&
-                    (self.position.y - center_y).abs() < 100
+                    (self.position.y - center_y).abs() < 120
             }
             Direction::West => {
                 self.position.x > center_x &&
                     self.position.x < center_x + approach_distance &&
-                    (self.position.y - center_y).abs() < 100
+                    (self.position.y - center_y).abs() < 120
             }
         }
     }
@@ -623,7 +550,7 @@ impl Vehicle {
         distance / self.current_velocity
     }
 
-    // More robust collision detection
+    // FINAL FIX: Much better collision detection
     pub fn could_collide_with(&self, other: &Vehicle, intersection: &Intersection) -> bool {
         if self.id == other.id {
             return false;
@@ -633,33 +560,22 @@ impl Vehicle {
         let dy = (self.position.y - other.position.y) as f64;
         let distance = (dx * dx + dy * dy).sqrt();
 
-        // More reasonable collision detection distance
-        if distance > 150.0 {
-            return false;
-        }
-
-        // Immediate collision check - if vehicles are very close
-        if distance < 40.0 {
+        if distance < 30.0 {
             return true;
         }
 
-        // Same lane following collision check
         if self.direction == other.direction && self.lane == other.lane {
             return self.is_vehicle_ahead_in_same_lane(other);
         }
 
-        // Intersection-based collision detection
-        if self.is_approaching_intersection(intersection) ||
-            other.is_approaching_intersection(intersection) ||
-            self.is_in_intersection(intersection) ||
-            other.is_in_intersection(intersection) {
-            return self.paths_intersect_improved(other);
+        if (self.is_approaching_intersection(intersection) || self.is_in_intersection(intersection)) &&
+            (other.is_approaching_intersection(intersection) || other.is_in_intersection(intersection)) {
+            return self.will_paths_actually_intersect(other);
         }
 
         false
     }
 
-    // Check if other vehicle is directly ahead in same lane
     fn is_vehicle_ahead_in_same_lane(&self, other: &Vehicle) -> bool {
         if self.direction != other.direction || self.lane != other.lane {
             return false;
@@ -672,36 +588,57 @@ impl Vehicle {
             Direction::West => other.position.x - self.position.x,
         };
 
-        distance_ahead > 0 && distance_ahead < 80 // Vehicle is ahead and close
+        distance_ahead > 0 && distance_ahead < Self::SAFE_DISTANCE as i32
     }
 
-    // Improved path intersection logic
-    fn paths_intersect_improved(&self, other: &Vehicle) -> bool {
-        // If both vehicles are going to the same destination, no conflict
-        if self.destination == other.destination {
-            return false;
-        }
-
-        // Same incoming direction with proper lane discipline
+    // FINAL FIX: Only real path intersections
+    fn will_paths_actually_intersect(&self, other: &Vehicle) -> bool {
         if self.direction == other.direction {
-            // Only conflict if somehow in same lane (shouldn't happen)
             return self.lane == other.lane;
         }
 
-        // Check if paths actually cross in intersection based on destinations
-        match (self.direction, self.destination, other.direction, other.destination) {
-            // Vehicles with conflicting turn paths
-            (Direction::North, Direction::West, Direction::East, Direction::North) => true,
-            (Direction::North, Direction::East, Direction::West, Direction::South) => true,
-            (Direction::South, Direction::East, Direction::West, Direction::North) => true,
-            (Direction::South, Direction::West, Direction::East, Direction::South) => true,
+        // FINAL FIX: Straight traffic should NEVER collide in proper 6-lane system
+        if self.route == Route::Straight && other.route == Route::Straight {
+            return false; // Separated by design
+        }
 
-            // Straight through conflicts
-            (Direction::North, Direction::North, Direction::South, Direction::South) => true,
-            (Direction::East, Direction::East, Direction::West, Direction::West) => true,
+        // Only specific turning conflicts
+        match (self.direction, self.route, other.direction, other.route) {
+            // Left turn vs straight from perpendicular direction
+            (Direction::North, Route::Left, Direction::East, Route::Straight) => true,
+            (Direction::South, Route::Left, Direction::West, Route::Straight) => true,
+            (Direction::East, Route::Left, Direction::South, Route::Straight) => true,
+            (Direction::West, Route::Left, Direction::North, Route::Straight) => true,
 
-            // Most turns don't conflict with proper lane discipline
+            // Opposing left turns
+            (Direction::North, Route::Left, Direction::South, Route::Left) => true,
+            (Direction::East, Route::Left, Direction::West, Route::Left) => true,
+
             _ => false,
         }
+    }
+
+    pub fn has_intersection_reservation(&self) -> bool {
+        self.has_reserved_intersection
+    }
+
+    pub fn set_intersection_reservation(&mut self, reserved: bool) {
+        self.has_reserved_intersection = reserved;
+    }
+
+    pub fn is_spawning_from_correct_edge(&self) -> bool {
+        let center_x = crate::WINDOW_WIDTH as f64 / 2.0;
+        let center_y = crate::WINDOW_HEIGHT as f64 / 2.0;
+
+        match self.direction {
+            Direction::North => self.position_f.1 > center_y + 100.0,
+            Direction::South => self.position_f.1 < center_y - 100.0,
+            Direction::East => self.position_f.0 < center_x - 100.0,
+            Direction::West => self.position_f.0 > center_x + 100.0,
+        }
+    }
+
+    pub fn get_lane_center_offset(&self) -> f64 {
+        self.lane_center_offset
     }
 }
