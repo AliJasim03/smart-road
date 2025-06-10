@@ -1,27 +1,29 @@
-// src/algorithm.rs - FIXED VERSION WITH IMPROVED COLLISION DETECTION
+// src/algorithm.rs - FIXED: Smart collision prevention for synchronized lane system
 use crate::intersection::Intersection;
-use crate::vehicle::{Vehicle, VehicleState, VelocityLevel, Direction};
+use crate::vehicle::{Vehicle, VehicleState, VelocityLevel, Direction, Route};
 use std::collections::{HashMap, VecDeque};
 
 pub struct SmartIntersection {
     // Keep track of close calls
     pub close_calls: u32,
-    // Track safe distance violations
-    safe_distance_violations: HashMap<u32, Vec<u32>>, // Vehicle ID to list of vehicles it had close calls with
+    // Track safe distance violations with timestamps
+    safe_distance_violations: HashMap<u32, Vec<(u32, f64)>>, // Vehicle ID to list of (other_vehicle_id, timestamp)
     // Track congestion by direction and lane
-    congestion_levels: HashMap<(Direction, usize), u32>, // (Direction, lane) to number of vehicles
+    congestion_levels: HashMap<(Direction, usize), u32>,
     // Enable adaptive mode for high traffic
     adaptive_mode: bool,
     // Track throughput for each direction
     direction_priority: [u32; 4], // Priority counter for [North, South, East, West]
-    // Track current vehicle flows
-    current_flows: Vec<(Direction, usize)>, // Currently prioritized (direction, lane) pairs
-    // FIXED: Add reservation system
+    // FIXED: Reservation system for intersection access
     intersection_reservations: HashMap<u32, f64>, // Vehicle ID -> expiration time
     current_time: f64,
-    // FIXED: More conservative intersection management
+    // FIXED: Conservative intersection management
     max_simultaneous_vehicles: usize,
     critical_collision_distance: f64,
+    safe_following_distance: f64,
+    // Performance tracking
+    last_cleanup_time: f64,
+    throughput_counter: u32,
 }
 
 impl SmartIntersection {
@@ -32,245 +34,348 @@ impl SmartIntersection {
             congestion_levels: HashMap::new(),
             adaptive_mode: false,
             direction_priority: [0; 4],
-            current_flows: Vec::new(),
             intersection_reservations: HashMap::new(),
             current_time: 0.0,
-            max_simultaneous_vehicles: 4, // FIXED: Reduced from implicit higher number
-            critical_collision_distance: 80.0, // FIXED: Increased critical distance
+            max_simultaneous_vehicles: 3, // Very conservative
+            critical_collision_distance: 100.0, // Increased safety distance
+            safe_following_distance: 120.0, // Even larger following distance
+            last_cleanup_time: 0.0,
+            throughput_counter: 0,
         }
     }
 
-    // FIXED: Process all vehicles with much stricter collision avoidance
+    // FIXED: Process all vehicles with smart collision prevention
     pub fn process_vehicles(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection, delta_time: u32) {
         self.current_time += delta_time as f64 / 1000.0;
 
-        // Clean up expired reservations
-        self.cleanup_expired_reservations();
+        // Clean up expired data periodically
+        if self.current_time - self.last_cleanup_time > 5.0 {
+            self.cleanup_expired_data();
+            self.last_cleanup_time = self.current_time;
+        }
 
         // First, update all vehicle positions
         for vehicle in vehicles.iter_mut() {
             vehicle.update(delta_time, intersection);
         }
 
-        // Analyze congestion levels
-        self.analyze_congestion(vehicles);
+        // Analyze traffic patterns
+        self.analyze_traffic_patterns(vehicles);
 
-        // FIXED: Apply much stricter collision detection and prevention
-        self.apply_strict_collision_prevention(vehicles, intersection);
+        // FIXED: Smart collision prevention with lane awareness
+        self.apply_smart_collision_prevention(vehicles, intersection);
 
-        // Check for safe distance violations
-        self.check_safe_distances(vehicles);
+        // Manage intersection access intelligently
+        self.manage_smart_intersection_access(vehicles, intersection);
 
-        // Manage intersection access more strictly
-        self.manage_intersection_access_strict(vehicles, intersection);
+        // Check for safety violations
+        self.check_safety_violations(vehicles);
     }
 
-    // FIXED: Much stricter collision prevention
-    fn apply_strict_collision_prevention(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection) {
-        // Process vehicles in order of proximity to intersection
-        let mut vehicle_indices: Vec<usize> = (0..vehicles.len()).collect();
+    // FIXED: Smart collision prevention that understands lane separation
+    fn apply_smart_collision_prevention(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection) {
+        // Group vehicles by potential conflict zones (immutable access)
+        let conflict_groups = self.group_vehicles_by_conflict_zones(vehicles, intersection);
 
-        // Sort by distance to intersection (closest first)
-        vehicle_indices.sort_by(|&a, &b| {
-            let dist_a = self.distance_to_intersection_center(&vehicles[a]);
-            let dist_b = self.distance_to_intersection_center(&vehicles[b]);
-            dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Check each vehicle against all others for potential collisions
-        for i in 0..vehicle_indices.len() {
-            let idx_a = vehicle_indices[i];
-            let mut should_stop = false;
-            let mut should_slow = false;
-
-            if vehicles[idx_a].state == VehicleState::Completed {
+        // Process each conflict group separately (mutable access)
+        for group in conflict_groups.iter() {
+            if group.len() <= 1 {
                 continue;
             }
 
-            // Check against all other vehicles
-            for j in 0..vehicle_indices.len() {
-                if i == j {
-                    continue;
+            // Create a sorted copy of the group
+            let mut sorted_group = group.clone();
+
+            // Sort by priority (distance to intersection, route type, etc.)
+            sorted_group.sort_by(|&a, &b| {
+                let vehicle_a = &vehicles[a];
+                let vehicle_b = &vehicles[b];
+
+                // Priority rules:
+                // 1. Vehicles already in intersection have highest priority
+                let a_in_intersection = vehicle_a.is_in_intersection(intersection);
+                let b_in_intersection = vehicle_b.is_in_intersection(intersection);
+
+                if a_in_intersection && !b_in_intersection {
+                    return std::cmp::Ordering::Less;
+                }
+                if !a_in_intersection && b_in_intersection {
+                    return std::cmp::Ordering::Greater;
                 }
 
-                let idx_b = vehicle_indices[j];
-                if vehicles[idx_b].state == VehicleState::Completed {
-                    continue;
+                // 2. Straight traffic has priority over turning traffic
+                let a_straight = vehicle_a.route == Route::Straight;
+                let b_straight = vehicle_b.route == Route::Straight;
+
+                if a_straight && !b_straight {
+                    return std::cmp::Ordering::Less;
+                }
+                if !a_straight && b_straight {
+                    return std::cmp::Ordering::Greater;
                 }
 
-                let vehicle_a = &vehicles[idx_a];
-                let vehicle_b = &vehicles[idx_b];
+                // 3. Closer to intersection has priority
+                let dist_a = self.distance_to_intersection_center(vehicle_a);
+                let dist_b = self.distance_to_intersection_center(vehicle_b);
+                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+            });
 
-                // FIXED: Much more conservative collision detection
-                if vehicle_a.could_collide_with(vehicle_b, intersection) {
-                    let distance = self.calculate_distance(vehicle_a, vehicle_b);
-                    let time_to_collision = self.estimate_time_to_collision(vehicle_a, vehicle_b);
-
-                    // FIXED: Much more conservative thresholds
-                    if distance < self.critical_collision_distance && time_to_collision < 2.0 {
-                        // Determine who should yield based on strict priority rules
-                        if self.should_yield_strict(vehicle_a, vehicle_b, intersection) {
-                            if distance < 40.0 || time_to_collision < 0.8 {
-                                should_stop = true; // Complete stop for critical situations
-                                self.record_close_call(vehicle_a.id, vehicle_b.id);
-                            } else {
-                                should_slow = true;
-                            }
-                            break; // Found a conflict, no need to check others
-                        }
-                    } else if distance < 120.0 && time_to_collision < 3.0 {
-                        // Preventive slowing
-                        if self.should_yield_strict(vehicle_a, vehicle_b, intersection) {
-                            should_slow = true;
-                        }
-                    }
-                }
-            }
-
-            // Apply the most restrictive response
-            if should_stop {
-                vehicles[idx_a].set_target_velocity(VelocityLevel::Slow);
-                vehicles[idx_a].current_velocity *= 0.3; // Emergency braking
-                println!("🚨 Emergency stop for vehicle {} to avoid collision", vehicles[idx_a].id);
-            } else if should_slow {
-                vehicles[idx_a].set_target_velocity(VelocityLevel::Slow);
-                vehicles[idx_a].current_velocity *= 0.7; // Significant slowdown
-            } else {
-                // FIXED: More conservative speed recovery
-                self.allow_safe_speedup(idx_a, vehicles, intersection);
-            }
+            // Apply conflict resolution
+            self.resolve_conflicts_in_group(vehicles, intersection, &sorted_group);
         }
     }
 
-    // FIXED: Much stricter yielding rules
-    fn should_yield_strict(&self, vehicle_a: &Vehicle, vehicle_b: &Vehicle, intersection: &Intersection) -> bool {
-        // Rule 1: Vehicles already in the intersection have absolute priority
-        if vehicle_b.is_in_intersection(intersection) && !vehicle_a.is_in_intersection(intersection) {
+    // FIXED: Group vehicles that could potentially conflict
+    fn group_vehicles_by_conflict_zones(&self, vehicles: &VecDeque<Vehicle>, intersection: &Intersection) -> Vec<Vec<usize>> {
+        let mut groups = Vec::new();
+        let mut processed = vec![false; vehicles.len()];
+
+        for i in 0..vehicles.len() {
+            if processed[i] || vehicles[i].state == VehicleState::Completed {
+                continue;
+            }
+
+            let mut group = vec![i];
+            processed[i] = true;
+
+            // Find all vehicles that could conflict with vehicle i
+            for j in (i + 1)..vehicles.len() {
+                if processed[j] || vehicles[j].state == VehicleState::Completed {
+                    continue;
+                }
+
+                if self.could_vehicles_conflict(&vehicles[i], &vehicles[j], intersection) {
+                    group.push(j);
+                    processed[j] = true;
+                }
+            }
+
+            if group.len() > 1 {
+                groups.push(group);
+            }
+        }
+
+        groups
+    }
+
+    // FIXED: Determine if two vehicles could conflict
+    fn could_vehicles_conflict(&self, vehicle_a: &Vehicle, vehicle_b: &Vehicle, intersection: &Intersection) -> bool {
+        // Check physical proximity
+        let distance = self.calculate_distance(vehicle_a, vehicle_b);
+        if distance > 200.0 {
+            return false; // Too far apart to conflict
+        }
+
+        // Same lane same direction - always potential conflict
+        if vehicle_a.direction == vehicle_b.direction && vehicle_a.lane == vehicle_b.lane {
             return true;
         }
-        if vehicle_a.is_in_intersection(intersection) && !vehicle_b.is_in_intersection(intersection) {
+
+        // FIXED: Only check intersection conflicts for vehicles actually approaching/in intersection
+        let a_near_intersection = vehicle_a.is_approaching_intersection(intersection) || vehicle_a.is_in_intersection(intersection);
+        let b_near_intersection = vehicle_b.is_approaching_intersection(intersection) || vehicle_b.is_in_intersection(intersection);
+
+        if !a_near_intersection || !b_near_intersection {
             return false;
         }
 
-        // Rule 2: Same lane - vehicle behind yields
-        if vehicle_a.direction == vehicle_b.direction && vehicle_a.lane == vehicle_b.lane {
-            return self.is_vehicle_behind(vehicle_a, vehicle_b);
+        // FIXED: Straight traffic in properly separated lanes should NEVER conflict
+        if vehicle_a.route == Route::Straight && vehicle_b.route == Route::Straight {
+            // Check if they're in truly separated lanes
+            match (vehicle_a.direction, vehicle_b.direction) {
+                (Direction::North, Direction::South) | (Direction::South, Direction::North) => false, // Vertical separation
+                (Direction::East, Direction::West) | (Direction::West, Direction::East) => false,   // Horizontal separation
+                _ => false, // Perpendicular straight traffic is separated by design
+            }
+        } else {
+            // Only specific turning scenarios can conflict
+            self.do_turning_paths_intersect(vehicle_a, vehicle_b)
+        }
+    }
+
+    // FIXED: Check if turning paths actually intersect
+    fn do_turning_paths_intersect(&self, vehicle_a: &Vehicle, vehicle_b: &Vehicle) -> bool {
+        match (vehicle_a.direction, vehicle_a.route, vehicle_b.direction, vehicle_b.route) {
+            // Left turner vs straight from perpendicular direction
+            (Direction::North, Route::Left, Direction::East, Route::Straight) => true,
+            (Direction::South, Route::Left, Direction::West, Route::Straight) => true,
+            (Direction::East, Route::Left, Direction::South, Route::Straight) => true,
+            (Direction::West, Route::Left, Direction::North, Route::Straight) => true,
+
+            // Reverse cases
+            (Direction::East, Route::Straight, Direction::North, Route::Left) => true,
+            (Direction::West, Route::Straight, Direction::South, Route::Left) => true,
+            (Direction::South, Route::Straight, Direction::East, Route::Left) => true,
+            (Direction::North, Route::Straight, Direction::West, Route::Left) => true,
+
+            // Opposing left turns can conflict in intersection center
+            (Direction::North, Route::Left, Direction::South, Route::Left) => true,
+            (Direction::East, Route::Left, Direction::West, Route::Left) => true,
+
+            // Right turns generally don't conflict with others (tight turns)
+            _ => false,
+        }
+    }
+
+    // FIXED: Resolve conflicts within a group of vehicles
+    fn resolve_conflicts_in_group(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection, group: &[usize]) {
+        if group.len() <= 1 {
+            return;
         }
 
-        // Rule 3: Intersection conflicts - use right-of-way rules
-        if vehicle_a.is_approaching_intersection(intersection) && vehicle_b.is_approaching_intersection(intersection) {
-            // Vehicles with reservations have priority
-            if vehicle_b.has_intersection_reservation() && !vehicle_a.has_intersection_reservation() {
-                return true;
+        let priority_vehicle_idx = group[0];
+
+        // Check if priority vehicle can proceed safely (immutable borrow)
+        let can_proceed = self.is_safe_to_proceed(vehicles, intersection, priority_vehicle_idx, group);
+
+        // Apply decisions (mutable borrow)
+        if can_proceed {
+            self.allow_vehicle_to_proceed(vehicles, priority_vehicle_idx);
+        } else {
+            // Even priority vehicle must slow down
+            self.apply_conservative_slowdown(vehicles, priority_vehicle_idx);
+        }
+
+        // Other vehicles must yield
+        for &vehicle_idx in &group[1..] {
+            self.apply_yielding_behavior(vehicles, intersection, vehicle_idx, priority_vehicle_idx);
+        }
+    }
+
+    // FIXED: Check if it's safe for a vehicle to proceed
+    fn is_safe_to_proceed(&self, vehicles: &VecDeque<Vehicle>, intersection: &Intersection, vehicle_idx: usize, group: &[usize]) -> bool {
+        let vehicle = &vehicles[vehicle_idx];
+
+        // Check if path is clear ahead
+        for &other_idx in group {
+            if other_idx == vehicle_idx {
+                continue;
             }
-            if vehicle_a.has_intersection_reservation() && !vehicle_b.has_intersection_reservation() {
+
+            let other = &vehicles[other_idx];
+            let distance = self.calculate_distance(vehicle, other);
+
+            // Too close - not safe
+            if distance < self.safe_following_distance {
                 return false;
             }
 
-            // FIXED: Stricter right-of-way rules based on actual traffic rules
-            match (vehicle_a.direction, vehicle_b.direction) {
-                // Opposing traffic - left turns yield to straight/right
-                (Direction::North, Direction::South) | (Direction::South, Direction::North) => {
-                    if vehicle_a.route == crate::vehicle::Route::Left && vehicle_b.route != crate::vehicle::Route::Left {
-                        return true;
-                    }
-                    if vehicle_b.route == crate::vehicle::Route::Left && vehicle_a.route != crate::vehicle::Route::Left {
-                        return false;
-                    }
-                }
-                (Direction::East, Direction::West) | (Direction::West, Direction::East) => {
-                    if vehicle_a.route == crate::vehicle::Route::Left && vehicle_b.route != crate::vehicle::Route::Left {
-                        return true;
-                    }
-                    if vehicle_b.route == crate::vehicle::Route::Left && vehicle_a.route != crate::vehicle::Route::Left {
-                        return false;
-                    }
-                }
-
-                // Perpendicular traffic - right-hand rule (vehicle from right has priority)
-                (Direction::North, Direction::East) => return true,  // East (right) has priority
-                (Direction::East, Direction::South) => return true,  // South (right) has priority
-                (Direction::South, Direction::West) => return true,  // West (right) has priority
-                (Direction::West, Direction::North) => return true,  // North (right) has priority
-                (Direction::East, Direction::North) => return false,
-                (Direction::South, Direction::East) => return false,
-                (Direction::West, Direction::South) => return false,
-                (Direction::North, Direction::West) => return false,
-                _ => {}
+            // Check if other vehicle is blocking the path
+            if self.is_vehicle_blocking_path(vehicle, other, intersection) {
+                return false;
             }
         }
 
-        // Rule 4: Time to intersection (closer vehicle has priority)
-        let time_a = vehicle_a.time_to_intersection(intersection);
-        let time_b = vehicle_b.time_to_intersection(intersection);
+        // Check intersection capacity
+        let vehicles_in_intersection = vehicles.iter()
+            .filter(|v| v.is_in_intersection(intersection))
+            .count();
 
-        // Vehicle that will reach intersection first has right of way
-        time_a > time_b + 0.5 // Add buffer for safety
-    }
-
-    // Check if vehicle_a is behind vehicle_b in the same lane
-    fn is_vehicle_behind(&self, vehicle_a: &Vehicle, vehicle_b: &Vehicle) -> bool {
-        if vehicle_a.direction != vehicle_b.direction || vehicle_a.lane != vehicle_b.lane {
+        if vehicles_in_intersection >= self.max_simultaneous_vehicles && !vehicle.is_in_intersection(intersection) {
             return false;
         }
 
-        match vehicle_a.direction {
-            Direction::North => vehicle_a.position.y > vehicle_b.position.y,
-            Direction::South => vehicle_a.position.y < vehicle_b.position.y,
-            Direction::East => vehicle_a.position.x < vehicle_b.position.x,
-            Direction::West => vehicle_a.position.x > vehicle_b.position.x,
+        true
+    }
+
+    // FIXED: Check if one vehicle is blocking another's path
+    fn is_vehicle_blocking_path(&self, vehicle: &Vehicle, other: &Vehicle, intersection: &Intersection) -> bool {
+        // Same lane same direction
+        if vehicle.direction == other.direction && vehicle.lane == other.lane {
+            return self.is_vehicle_ahead_in_same_lane(vehicle, other);
+        }
+
+        // Different paths - check if they intersect spatially
+        if vehicle.could_collide_with(other, intersection) {
+            let time_to_intersection_self = vehicle.time_to_intersection(intersection);
+            let time_to_intersection_other = other.time_to_intersection(intersection);
+
+            // If arrival times are too close, it's blocking
+            return (time_to_intersection_self - time_to_intersection_other).abs() < 2.0;
+        }
+
+        false
+    }
+
+    fn is_vehicle_ahead_in_same_lane(&self, vehicle: &Vehicle, other: &Vehicle) -> bool {
+        if vehicle.direction != other.direction || vehicle.lane != other.lane {
+            return false;
+        }
+
+        let distance_ahead = match vehicle.direction {
+            Direction::North => other.position.y - vehicle.position.y,
+            Direction::South => vehicle.position.y - other.position.y,
+            Direction::East => other.position.x - vehicle.position.x,
+            Direction::West => vehicle.position.x - other.position.x,
+        };
+
+        distance_ahead > 0 && distance_ahead < self.safe_following_distance as i32
+    }
+
+    fn allow_vehicle_to_proceed(&mut self, vehicles: &mut VecDeque<Vehicle>, vehicle_idx: usize) {
+        let vehicle = &mut vehicles[vehicle_idx];
+
+        match vehicle.state {
+            VehicleState::Approaching => {
+                vehicle.set_target_velocity(VelocityLevel::Medium);
+            }
+            VehicleState::Entering | VehicleState::Turning => {
+                vehicle.set_target_velocity(VelocityLevel::Slow); // Conservative in intersection
+            }
+            VehicleState::Exiting => {
+                vehicle.set_target_velocity(VelocityLevel::Medium);
+            }
+            VehicleState::Completed => {
+                vehicle.set_target_velocity(VelocityLevel::Fast);
+            }
         }
     }
 
-    // FIXED: Much more conservative speed-up conditions
-    fn allow_safe_speedup(&mut self, vehicle_idx: usize, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection) {
-        // First, check safety without borrowing conflicts
-        let mut safe_to_speedup = true;
-        let safety_radius = 150.0; // Large safety radius
-        let vehicle_pos = vehicles[vehicle_idx].position;
-        let vehicle_state = vehicles[vehicle_idx].state;
-        let vehicle_id = vehicles[vehicle_idx].id;
-        let vehicle_is_in_intersection = vehicles[vehicle_idx].is_in_intersection(intersection);
+    fn apply_conservative_slowdown(&mut self, vehicles: &mut VecDeque<Vehicle>, vehicle_idx: usize) {
+        let vehicle = &mut vehicles[vehicle_idx];
+        vehicle.set_target_velocity(VelocityLevel::Slow);
 
-        // Only allow speedup if there are no conflicts and vehicle is not in intersection
-        if !vehicle_is_in_intersection {
-            // Check all other vehicles within safety radius
-            for (i, other) in vehicles.iter().enumerate() {
-                if i == vehicle_idx || other.state == VehicleState::Completed {
-                    continue;
+        // Additional emergency braking if very close to conflict
+        if vehicle.current_velocity > Vehicle::SLOW_VELOCITY {
+            vehicle.current_velocity *= 0.8;
+        }
+    }
+
+    fn apply_yielding_behavior(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection, vehicle_idx: usize, priority_vehicle_idx: usize) {
+        // Calculate distance first (immutable access)
+        let distance_to_priority = {
+            let vehicle = &vehicles[vehicle_idx];
+            let priority_vehicle = &vehicles[priority_vehicle_idx];
+            self.calculate_distance(vehicle, priority_vehicle)
+        };
+
+        // Apply yielding behavior based on distance (mutable access)
+        if distance_to_priority < self.critical_collision_distance {
+            // Emergency stop
+            vehicles[vehicle_idx].set_target_velocity(VelocityLevel::Slow);
+            vehicles[vehicle_idx].current_velocity *= 0.5; // Emergency braking
+
+            let vehicle_id = vehicles[vehicle_idx].id;
+            let priority_id = vehicles[priority_vehicle_idx].id;
+            self.record_close_call(vehicle_id, priority_id);
+        } else if distance_to_priority < self.safe_following_distance {
+            // Gradual slowdown
+            vehicles[vehicle_idx].set_target_velocity(VelocityLevel::Slow);
+        } else {
+            // Cautious approach
+            match vehicles[vehicle_idx].state {
+                VehicleState::Approaching => {
+                    vehicles[vehicle_idx].set_target_velocity(VelocityLevel::Slow);
                 }
-
-                let dx = (vehicle_pos.x - other.position.x) as f64;
-                let dy = (vehicle_pos.y - other.position.y) as f64;
-                let distance = (dx * dx + dy * dy).sqrt();
-
-                if distance < safety_radius {
-                    // Simple collision check to avoid complex borrowing
-                    if vehicles[vehicle_idx].could_collide_with(other, intersection) {
-                        safe_to_speedup = false;
-                        break;
-                    }
-                }
-            }
-
-            if safe_to_speedup {
-                match vehicle_state {
-                    VehicleState::Approaching => {
-                        vehicles[vehicle_idx].set_target_velocity(VelocityLevel::Medium);
-                    }
-                    VehicleState::Exiting | VehicleState::Completed => {
-                        vehicles[vehicle_idx].set_target_velocity(VelocityLevel::Fast);
-                    }
-                    _ => {
-                        // Don't speed up in intersection
-                    }
+                _ => {
+                    vehicles[vehicle_idx].set_target_velocity(VelocityLevel::Medium);
                 }
             }
         }
     }
 
-    // FIXED: Strict intersection access management
-    fn manage_intersection_access_strict(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection) {
+    // FIXED: Smart intersection access management
+    fn manage_smart_intersection_access(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection) {
         // Count vehicles currently in intersection
         let vehicles_in_intersection: Vec<usize> = vehicles.iter()
             .enumerate()
@@ -278,54 +383,41 @@ impl SmartIntersection {
             .map(|(i, _)| i)
             .collect();
 
-        // If intersection is at capacity, stop approaching vehicles
+        // If at capacity, deny new entries
         if vehicles_in_intersection.len() >= self.max_simultaneous_vehicles {
             for (i, vehicle) in vehicles.iter_mut().enumerate() {
                 if vehicle.is_approaching_intersection(intersection) && !vehicles_in_intersection.contains(&i) {
                     vehicle.set_target_velocity(VelocityLevel::Slow);
-                    vehicle.current_velocity *= 0.6; // Significant slowdown
                 }
             }
             return;
         }
 
-        // FIXED: Collect reservation decisions first, then apply them
-        let mut reservation_decisions = Vec::new();
+        // FIXED: Collect access decisions first, then apply them
+        let mut access_decisions = Vec::new();
 
-        // First pass: decide who gets reservations
+        // First pass: decide who gets access (immutable borrow)
         for (i, vehicle) in vehicles.iter().enumerate() {
             if vehicle.is_approaching_intersection(intersection) && !vehicle.has_intersection_reservation() {
-                let can_grant = self.can_grant_intersection_reservation_safe(i, vehicles, intersection);
-                reservation_decisions.push((i, vehicle.id, can_grant));
+                let can_grant = self.can_grant_safe_access(i, vehicles, intersection);
+                access_decisions.push((i, vehicle.id, can_grant));
             }
         }
 
-        // Second pass: apply reservation decisions
-        for (vehicle_idx, vehicle_id, should_grant) in reservation_decisions {
+        // Second pass: apply decisions (mutable borrow)
+        for (vehicle_idx, vehicle_id, should_grant) in access_decisions {
             if should_grant {
                 vehicles[vehicle_idx].set_intersection_reservation(true);
-                self.intersection_reservations.insert(vehicle_id, self.current_time + 10.0);
-                println!("🎫 Granted intersection reservation to vehicle {}", vehicle_id);
-            } else {
-                vehicles[vehicle_idx].set_target_velocity(VelocityLevel::Slow);
-            }
-        }
-
-        // Allow reserved vehicles to proceed at normal speed
-        for vehicle in vehicles.iter_mut() {
-            if vehicle.has_intersection_reservation() && vehicle.is_approaching_intersection(intersection) {
-                if vehicles_in_intersection.len() < self.max_simultaneous_vehicles {
-                    vehicle.set_target_velocity(VelocityLevel::Medium);
-                }
+                self.intersection_reservations.insert(vehicle_id, self.current_time + 15.0);
+                println!("🎫 Granted intersection access to vehicle {}", vehicle_id);
             }
         }
     }
 
-    // FIXED: Check if it's safe to grant intersection reservation (immutable version)
-    fn can_grant_intersection_reservation_safe(&self, vehicle_idx: usize, vehicles: &VecDeque<Vehicle>, intersection: &Intersection) -> bool {
+    fn can_grant_safe_access(&self, vehicle_idx: usize, vehicles: &VecDeque<Vehicle>, intersection: &Intersection) -> bool {
         let vehicle = &vehicles[vehicle_idx];
 
-        // Check conflicts with vehicles already in intersection
+        // Check for conflicts with vehicles already in intersection
         for (i, other) in vehicles.iter().enumerate() {
             if i == vehicle_idx {
                 continue;
@@ -333,11 +425,8 @@ impl SmartIntersection {
 
             if other.is_in_intersection(intersection) || other.has_intersection_reservation() {
                 if vehicle.could_collide_with(other, intersection) {
-                    let time_to_conflict = vehicle.time_to_intersection(intersection);
-                    let other_time = other.time_to_intersection(intersection);
-
-                    // Don't grant if conflict would occur within 3 seconds
-                    if (time_to_conflict - other_time).abs() < 3.0 {
+                    let time_diff = (vehicle.time_to_intersection(intersection) - other.time_to_intersection(intersection)).abs();
+                    if time_diff < 4.0 { // Increased safety margin
                         return false;
                     }
                 }
@@ -347,37 +436,19 @@ impl SmartIntersection {
         true
     }
 
-    fn cleanup_expired_reservations(&mut self) {
-        self.intersection_reservations.retain(|_, &mut expiration_time| {
-            expiration_time > self.current_time
-        });
-    }
-
-    fn record_close_call(&mut self, vehicle1_id: u32, vehicle2_id: u32) {
-        self.close_calls += 1;
-        println!("⚠️ CLOSE CALL #{}: Vehicles {} and {} nearly collided!", self.close_calls, vehicle1_id, vehicle2_id);
-
-        // Record in violations map
-        self.safe_distance_violations
-            .entry(vehicle1_id)
-            .or_insert(Vec::new())
-            .push(vehicle2_id);
-    }
-
-    // Analyze congestion levels for each direction and lane
-    fn analyze_congestion(&mut self, vehicles: &VecDeque<Vehicle>) {
+    fn analyze_traffic_patterns(&mut self, vehicles: &VecDeque<Vehicle>) {
         // Reset congestion counts
         self.congestion_levels.clear();
 
         // Count vehicles per direction and lane
         for vehicle in vehicles {
-            if vehicle.state == VehicleState::Approaching || vehicle.state == VehicleState::Entering {
+            if matches!(vehicle.state, VehicleState::Approaching | VehicleState::Entering) {
                 let key = (vehicle.direction, vehicle.lane);
                 *self.congestion_levels.entry(key).or_insert(0) += 1;
             }
         }
 
-        // Calculate total congestion per direction
+        // Determine if adaptive mode is needed
         let mut direction_congestion = [0; 4];
         for ((direction, _), count) in &self.congestion_levels {
             let dir_index = match direction {
@@ -389,78 +460,78 @@ impl SmartIntersection {
             direction_congestion[dir_index] += count;
         }
 
-        // FIXED: More conservative congestion threshold
-        self.adaptive_mode = direction_congestion.iter().any(|&count| count > 6); // Reduced from 12
-
-        // Update direction priority based on throughput deficit
-        for i in 0..4 {
-            if direction_congestion[i] > 4 { // Reduced threshold
-                self.direction_priority[i] += 2;
-            } else if direction_congestion[i] > 2 {
-                self.direction_priority[i] += 1;
-            }
-
-            // Cap priority
-            if self.direction_priority[i] > 8 { // Reduced cap
-                self.direction_priority[i] = 8;
-            }
-        }
+        self.adaptive_mode = direction_congestion.iter().any(|&count| count > 4);
 
         if self.adaptive_mode {
             println!("🚨 ADAPTIVE MODE: High congestion detected - {:?}", direction_congestion);
         }
     }
 
-    // FIXED: Stricter safe distance checking
-    fn check_safe_distances(&mut self, vehicles: &VecDeque<Vehicle>) {
+    fn check_safety_violations(&mut self, vehicles: &VecDeque<Vehicle>) {
         for (i, vehicle_a) in vehicles.iter().enumerate() {
             for (j, vehicle_b) in vehicles.iter().enumerate() {
-                if i == j {
+                if i == j || vehicle_a.state == VehicleState::Completed || vehicle_b.state == VehicleState::Completed {
                     continue;
                 }
 
-                if vehicle_a.state == VehicleState::Completed || vehicle_b.state == VehicleState::Completed {
-                    continue;
-                }
-
-                // Check if vehicles are in the same lane and direction
-                if vehicle_a.direction == vehicle_b.direction && vehicle_a.lane == vehicle_b.lane {
-                    let distance = self.calculate_distance(vehicle_a, vehicle_b);
-
-                    // FIXED: Stricter safe distance checking
-                    if distance < Vehicle::SAFE_DISTANCE {
-                        // Record safe distance violation
-                        let violations = self.safe_distance_violations
-                            .entry(vehicle_a.id)
-                            .or_insert(Vec::new());
-
-                        if !violations.contains(&vehicle_b.id) {
-                            self.close_calls += 1;
-                            violations.push(vehicle_b.id);
-                            println!("⚠️ Safe distance violation between vehicles {} and {} (distance: {:.1})",
-                                     vehicle_a.id, vehicle_b.id, distance);
-                        }
-                    }
-                }
-
-                // Also check for general collision proximity
                 let distance = self.calculate_distance(vehicle_a, vehicle_b);
-                if distance < 35.0 && vehicle_a.could_collide_with(vehicle_b, &Intersection::new()) {
-                    let violations = self.safe_distance_violations
-                        .entry(vehicle_a.id)
-                        .or_insert(Vec::new());
 
-                    if !violations.contains(&vehicle_b.id) {
-                        self.close_calls += 1;
-                        violations.push(vehicle_b.id);
-                        println!("⚠️ Proximity warning: vehicles {} and {} very close (distance: {:.1})",
-                                 vehicle_a.id, vehicle_b.id, distance);
-                    }
+                // Check safe distance violations
+                if distance < Vehicle::SAFE_DISTANCE {
+                    self.record_safe_distance_violation(vehicle_a.id, vehicle_b.id);
+                }
+
+                // Check critical proximity
+                if distance < 30.0 && vehicle_a.could_collide_with(vehicle_b, &Intersection::new()) {
+                    self.record_close_call(vehicle_a.id, vehicle_b.id);
                 }
             }
         }
     }
 
+    fn record_close_call(&mut self, vehicle1_id: u32, vehicle2_id: u32) {
+        // Avoid duplicate close calls between same pair
+        let violations = self.safe_distance_violations
+            .entry(vehicle1_id)
+            .or_insert(Vec::new());
+
+        let already_recorded = violations.iter()
+            .any(|(id, time)| *id == vehicle2_id && self.current_time - time < 5.0);
+
+        if !already_recorded {
+            self.close_calls += 1;
+            violations.push((vehicle2_id, self.current_time));
+            println!("⚠️ CLOSE CALL #{}: Vehicles {} and {} nearly collided!",
+                     self.close_calls, vehicle1_id, vehicle2_id);
+        }
+    }
+
+    fn record_safe_distance_violation(&mut self, vehicle1_id: u32, vehicle2_id: u32) {
+        let violations = self.safe_distance_violations
+            .entry(vehicle1_id)
+            .or_insert(Vec::new());
+
+        let already_recorded = violations.iter()
+            .any(|(id, time)| *id == vehicle2_id && self.current_time - time < 2.0);
+
+        if !already_recorded {
+            violations.push((vehicle2_id, self.current_time));
+        }
+    }
+
+    fn cleanup_expired_data(&mut self) {
+        // Clean up old violations
+        for violations in self.safe_distance_violations.values_mut() {
+            violations.retain(|(_, time)| self.current_time - time < 10.0);
+        }
+
+        // Clean up expired reservations
+        self.intersection_reservations.retain(|_, &mut expiration_time| {
+            expiration_time > self.current_time
+        });
+    }
+
+    // Utility functions
     fn distance_to_intersection_center(&self, vehicle: &Vehicle) -> f64 {
         let center_x = crate::WINDOW_WIDTH as f64 / 2.0;
         let center_y = crate::WINDOW_HEIGHT as f64 / 2.0;
@@ -477,15 +548,18 @@ impl SmartIntersection {
         (dx * dx + dy * dy).sqrt()
     }
 
-    fn estimate_time_to_collision(&self, vehicle1: &Vehicle, vehicle2: &Vehicle) -> f64 {
-        let distance = self.calculate_distance(vehicle1, vehicle2);
-
-        let relative_speed = if vehicle1.direction == vehicle2.direction {
-            (vehicle1.current_velocity - vehicle2.current_velocity).abs().max(1.0)
+    pub fn get_statistics(&self) -> (u32, f64, usize, usize) {
+        let avg_congestion = if !self.congestion_levels.is_empty() {
+            self.congestion_levels.values().sum::<u32>() as f64 / self.congestion_levels.len() as f64
         } else {
-            (vehicle1.current_velocity + vehicle2.current_velocity).max(1.0)
+            0.0
         };
 
-        distance / relative_speed
+        (
+            self.throughput_counter,
+            avg_congestion,
+            self.intersection_reservations.len(),
+            self.safe_distance_violations.len(),
+        )
     }
 }
