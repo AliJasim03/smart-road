@@ -1,4 +1,4 @@
-// src/main.rs - FIXED: Smooth animations and perfect lane sectioning
+// src/main.rs - FIXED: Simple rendering with perfect lane positioning
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
@@ -21,25 +21,25 @@ use algorithm::SmartIntersection;
 pub const WINDOW_WIDTH: u32 = 1024;
 pub const WINDOW_HEIGHT: u32 = 768;
 const FPS: u32 = 60;
-const PHYSICS_TIMESTEP: f64 = 1.0 / 60.0; // Fixed physics timestep
+const PHYSICS_TIMESTEP: f64 = 1.0 / 60.0;
 
 // PERFECT 6-LANE MATHEMATICS
-const LANE_WIDTH: f32 = 30.0;           // Each lane exactly 30px
-const TOTAL_ROAD_WIDTH: f32 = 180.0;    // 6 lanes × 30px = 180px
-const HALF_ROAD_WIDTH: f32 = 90.0;      // 90px each side of center
+const LANE_WIDTH: f32 = 30.0;
+const TOTAL_ROAD_WIDTH: f32 = 180.0;
+const HALF_ROAD_WIDTH: f32 = 90.0;
 
 fn main() -> Result<(), String> {
-    println!("=== Smart Road - PERFECT 6-LANE SYSTEM WITH SMOOTH ANIMATIONS ===");
-    println!("✅ Fixed timestep physics: {}ms", (PHYSICS_TIMESTEP * 1000.0) as u32);
-    println!("✅ Bezier curve turning animations");
-    println!("✅ Floating-point rendering for smoothness");
-    println!("✅ Perfect lane sectioning with intersection boundaries\n");
+    println!("=== Smart Road - FIXED SIMPLE SYSTEM ===");
+    println!("✅ Simple 90-degree turns");
+    println!("✅ Perfect lane positioning");
+    println!("✅ Fixed rendering bugs");
+    println!("✅ Improved collision avoidance\n");
 
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
 
     let window = video_subsystem
-        .window("Smart Road - SMOOTH ANIMATIONS", WINDOW_WIDTH, WINDOW_HEIGHT)
+        .window("Smart Road - FIXED SYSTEM", WINDOW_WIDTH, WINDOW_HEIGHT)
         .position_centered()
         .build()
         .map_err(|e| e.to_string())?;
@@ -77,15 +77,12 @@ fn main() -> Result<(), String> {
             }
         }
 
-        // Fixed timestep physics updates
+        // Fixed timestep physics
         while physics_accumulator >= PHYSICS_TIMESTEP {
             game.update_physics(PHYSICS_TIMESTEP);
             physics_accumulator -= PHYSICS_TIMESTEP;
         }
 
-        // Interpolation factor for smooth rendering
-        let alpha = (physics_accumulator / PHYSICS_TIMESTEP) as f32;
-        game.update_interpolation(alpha);
         game.render(&mut canvas)?;
 
         let frame_time = now.elapsed();
@@ -118,6 +115,14 @@ fn print_lane_mathematics() {
     println!("Screen center: ({}, {})", center_x, center_y);
     println!("Lane width: {} pixels each", LANE_WIDTH);
     println!("Total road width: {} pixels", TOTAL_ROAD_WIDTH);
+
+    // VERIFY MAPPING
+    println!("\n*** LANE-ROUTE-COLOR MAPPING ***");
+    for lane in 0..3 {
+        let route = get_route_for_lane(lane);
+        let color = get_color_for_route(route);
+        println!("Lane {}: {:?} → {:?}", lane, route, color);
+    }
 
     println!("\nNorth-bound lanes (right side of vertical road):");
     for lane in 0..3 {
@@ -178,30 +183,35 @@ fn get_lane_center_y(direction: Direction, lane: usize) -> f32 {
 }
 
 fn get_destination_for_route(incoming: Direction, route: Route) -> Direction {
-    match (incoming, route) {
+    let dest = match (incoming, route) {
+        // LEFT TURNS
         (Direction::North, Route::Left) => Direction::West,
-        (Direction::North, Route::Straight) => Direction::North,
-        (Direction::North, Route::Right) => Direction::East,
-
         (Direction::South, Route::Left) => Direction::East,
-        (Direction::South, Route::Straight) => Direction::South,
-        (Direction::South, Route::Right) => Direction::West,
-
         (Direction::East, Route::Left) => Direction::North,
-        (Direction::East, Route::Straight) => Direction::East,
-        (Direction::East, Route::Right) => Direction::South,
-
         (Direction::West, Route::Left) => Direction::South,
+
+        // STRAIGHT
+        (Direction::North, Route::Straight) => Direction::North,
+        (Direction::South, Route::Straight) => Direction::South,
+        (Direction::East, Route::Straight) => Direction::East,
         (Direction::West, Route::Straight) => Direction::West,
+
+        // RIGHT TURNS
+        (Direction::North, Route::Right) => Direction::East,
+        (Direction::South, Route::Right) => Direction::West,
+        (Direction::East, Route::Right) => Direction::South,
         (Direction::West, Route::Right) => Direction::North,
-    }
+    };
+
+    println!("ROUTE CALC: {:?} + {:?} = {:?}", incoming, route, dest);
+    dest
 }
 
 fn get_route_for_lane(lane: usize) -> Route {
     match lane {
-        0 => Route::Left,
-        1 => Route::Straight,
-        2 => Route::Right,
+        0 => Route::Left,     // Lane 0 (RED) = Left turn
+        1 => Route::Straight, // Lane 1 (BLUE) = Straight
+        2 => Route::Right,    // Lane 2 (GREEN) = Right turn
         _ => Route::Straight,
     }
 }
@@ -232,36 +242,6 @@ fn get_route_name(lane: usize) -> &'static str {
     }
 }
 
-struct PerformanceMonitor {
-    frame_times: Vec<f32>,
-    last_update: Instant,
-}
-
-impl PerformanceMonitor {
-    fn new() -> Self {
-        PerformanceMonitor {
-            frame_times: Vec::new(),
-            last_update: Instant::now(),
-        }
-    }
-
-    fn record_frame(&mut self) {
-        let now = Instant::now();
-        let frame_time = now.duration_since(self.last_update).as_secs_f32();
-        self.frame_times.push(frame_time);
-        self.last_update = now;
-
-        if self.frame_times.len() >= 60 {
-            let avg_time = self.frame_times.iter().sum::<f32>() / self.frame_times.len() as f32;
-            let fps = 1.0 / avg_time;
-            if fps < 55.0 {
-                println!("⚠️ Performance warning: {:.1} FPS", fps);
-            }
-            self.frame_times.clear();
-        }
-    }
-}
-
 struct GameState {
     vehicles: VecDeque<Vehicle>,
     intersection: Intersection,
@@ -278,7 +258,6 @@ struct GameState {
     crashed_vehicle_pairs: HashSet<(u32, u32)>,
     crash_count: u32,
     debug_mode: bool,
-    performance_monitor: PerformanceMonitor,
 }
 
 impl GameState {
@@ -288,7 +267,7 @@ impl GameState {
             intersection: Intersection::new(),
             statistics: Statistics::new(),
             algorithm: SmartIntersection::new(),
-            spawn_cooldown: 2.5,
+            spawn_cooldown: 1.5,
             current_cooldown: 0.0,
             continuous_spawn: false,
             spawn_timer: 0.0,
@@ -299,7 +278,6 @@ impl GameState {
             crashed_vehicle_pairs: HashSet::new(),
             crash_count: 0,
             debug_mode: false,
-            performance_monitor: PerformanceMonitor::new(),
         })
     }
 
@@ -318,13 +296,13 @@ impl GameState {
                         }
                     }
                     Keycode::Left => {
-                        if self.spawn_vehicle(Direction::East) {
-                            println!("✅ Spawned vehicle from West (→ East)");
+                        if self.spawn_vehicle(Direction::West) {
+                            println!("✅ Spawned vehicle from East (→ West)");
                         }
                     }
                     Keycode::Right => {
-                        if self.spawn_vehicle(Direction::West) {
-                            println!("✅ Spawned vehicle from East (→ West)");
+                        if self.spawn_vehicle(Direction::East) {
+                            println!("✅ Spawned vehicle from West (→ East)");
                         }
                     }
                     Keycode::R => {
@@ -355,7 +333,7 @@ impl GameState {
 
         if self.continuous_spawn {
             self.spawn_timer += dt as f32;
-            if self.spawn_timer >= 6.0 {
+            if self.spawn_timer >= 3.0 {
                 use rand::Rng;
                 let mut rng = rand::thread_rng();
                 let direction = match rng.gen_range(0..4) {
@@ -372,9 +350,10 @@ impl GameState {
             }
         }
 
-        // Update algorithm and vehicles with fixed timestep
+        // Process algorithm
         self.algorithm.process_vehicles(&mut self.vehicles, &self.intersection, (dt * 1000.0) as u32);
 
+        // Update vehicles
         for vehicle in &mut self.vehicles {
             vehicle.update_physics(dt, &self.intersection);
         }
@@ -384,19 +363,15 @@ impl GameState {
         self.close_calls = self.algorithm.close_calls;
     }
 
-    fn update_interpolation(&mut self, alpha: f32) {
-        for vehicle in &mut self.vehicles {
-            vehicle.update_interpolation(alpha);
-        }
-    }
-
     fn spawn_vehicle(&mut self, direction: Direction) -> bool {
         if self.current_cooldown > 0.0 {
             return false;
         }
 
+        // Check if same direction already has a vehicle approaching
         let same_direction_count = self.vehicles.iter()
-            .filter(|v| v.direction == direction)
+            .filter(|v| v.direction == direction &&
+                matches!(v.state, VehicleState::Approaching | VehicleState::Entering))
             .count();
         if same_direction_count >= 1 {
             return false;
@@ -409,7 +384,9 @@ impl GameState {
         let destination = get_destination_for_route(direction, route);
         let color = get_color_for_route(route);
 
-        let vehicle = Vehicle::new_smooth(
+        println!("DEBUG: Spawning vehicle - Lane: {}, Route: {:?}, Color: {:?}", lane, route, color);
+
+        let vehicle = Vehicle::new_simple(
             self.next_vehicle_id,
             direction,
             destination,
@@ -418,8 +395,8 @@ impl GameState {
             color,
         );
 
-        println!("🚗 Vehicle {}: {:?} Lane {} ({}) → {:?} road",
-                 vehicle.id, direction, lane, get_route_name(lane), destination);
+        println!("🚗 Vehicle {}: {:?} Lane {} ({}) → {:?} (Route: {:?})",
+                 vehicle.id, direction, lane, get_route_name(lane), destination, route);
 
         self.vehicles.push_back(vehicle);
         self.next_vehicle_id += 1;
@@ -434,15 +411,15 @@ impl GameState {
 
         self.vehicles.retain(|vehicle| {
             let off_screen = match vehicle.destination {
-                Direction::North => vehicle.position.y < -100.0,
-                Direction::South => vehicle.position.y > WINDOW_HEIGHT as f32 + 100.0,
-                Direction::East => vehicle.position.x > WINDOW_WIDTH as f32 + 100.0,
-                Direction::West => vehicle.position.x < -100.0,
+                Direction::North => vehicle.position.y < -150.0,
+                Direction::South => vehicle.position.y > WINDOW_HEIGHT as f32 + 150.0,
+                Direction::East => vehicle.position.x > WINDOW_WIDTH as f32 + 150.0,
+                Direction::West => vehicle.position.x < -150.0,
             };
 
-            if off_screen {
+            if off_screen && vehicle.state == VehicleState::Completed {
                 self.total_vehicles_passed += 1;
-                println!("✅ Vehicle {} completed journey smoothly", vehicle.id);
+                println!("✅ Vehicle {} completed journey", vehicle.id);
             }
 
             !off_screen
@@ -474,15 +451,15 @@ impl GameState {
         canvas.set_draw_color(Color::RGB(40, 120, 40));
         canvas.clear();
 
-        // Draw perfect road system with improved lane sectioning
-        self.draw_perfect_roads_with_sectioning(canvas)?;
+        // Draw roads
+        self.draw_roads(canvas)?;
 
         // Draw intersection
         self.draw_intersection(canvas)?;
 
-        // Draw vehicles with smooth rendering
+        // Draw vehicles
         for vehicle in &self.vehicles {
-            self.draw_vehicle_smooth(canvas, vehicle)?;
+            self.draw_vehicle_simple(canvas, vehicle)?;
         }
 
         // Draw debug overlays if enabled
@@ -493,14 +470,11 @@ impl GameState {
         // Draw UI
         self.draw_ui(canvas)?;
 
-        // Record performance
-        self.performance_monitor.record_frame();
-
         canvas.present();
         Ok(())
     }
 
-    fn draw_perfect_roads_with_sectioning(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
+    fn draw_roads(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
 
@@ -523,164 +497,63 @@ impl GameState {
             TOTAL_ROAD_WIDTH as u32,
         ))?;
 
-        // Draw improved lane lines with intersection boundary handling
-        self.draw_lane_markings_with_intersection_skip(canvas, center_x, center_y)?;
+        // Draw lane markings
+        self.draw_lane_markings(canvas, center_x, center_y)?;
 
-        // Draw perfect lane color indicators
+        // Draw lane indicators
         self.draw_lane_indicators(canvas)?;
 
         Ok(())
     }
 
-    fn draw_lane_markings_with_intersection_skip(&self, canvas: &mut Canvas<Window>, center_x: f32, center_y: f32) -> Result<(), String> {
+    fn draw_lane_markings(&self, canvas: &mut Canvas<Window>, center_x: f32, center_y: f32) -> Result<(), String> {
         canvas.set_draw_color(Color::RGB(255, 255, 255));
 
-        let intersection_bounds = Rect::new(
-            (center_x - HALF_ROAD_WIDTH) as i32,
-            (center_y - HALF_ROAD_WIDTH) as i32,
-            TOTAL_ROAD_WIDTH as u32,
-            TOTAL_ROAD_WIDTH as u32,
-        );
+        let intersection_half_size = HALF_ROAD_WIDTH;
 
-        // Vertical lane lines (for North-South traffic)
-        for lane in 0..4 {
+        // Vertical lane lines (skip intersection area)
+        for lane in 1..3 {
             let x = (center_x - HALF_ROAD_WIDTH + (lane as f32 * LANE_WIDTH)) as i32;
 
-            // North section (above intersection)
-            self.draw_line_segment_with_gap(
-                canvas,
-                Vec2::new(x as f32, 0.0),
-                Vec2::new(x as f32, (center_y - HALF_ROAD_WIDTH) as f32),
-                intersection_bounds,
-            )?;
-
-            // South section (below intersection)
-            self.draw_line_segment_with_gap(
-                canvas,
-                Vec2::new(x as f32, (center_y + HALF_ROAD_WIDTH) as f32),
-                Vec2::new(x as f32, WINDOW_HEIGHT as f32),
-                intersection_bounds,
-            )?;
+            // North section
+            canvas.draw_line((x, 0), (x, (center_y - intersection_half_size) as i32))?;
+            // South section
+            canvas.draw_line((x, (center_y + intersection_half_size) as i32), (x, WINDOW_HEIGHT as i32))?;
         }
 
-        // Horizontal lane lines (for East-West traffic)
-        for lane in 0..4 {
+        // Horizontal lane lines (skip intersection area)
+        for lane in 1..3 {
             let y = (center_y - HALF_ROAD_WIDTH + (lane as f32 * LANE_WIDTH)) as i32;
 
-            // West section (left of intersection)
-            self.draw_line_segment_with_gap(
-                canvas,
-                Vec2::new(0.0, y as f32),
-                Vec2::new((center_x - HALF_ROAD_WIDTH) as f32, y as f32),
-                intersection_bounds,
-            )?;
-
-            // East section (right of intersection)
-            self.draw_line_segment_with_gap(
-                canvas,
-                Vec2::new((center_x + HALF_ROAD_WIDTH) as f32, y as f32),
-                Vec2::new(WINDOW_WIDTH as f32, y as f32),
-                intersection_bounds,
-            )?;
+            // West section
+            canvas.draw_line((0, y), ((center_x - intersection_half_size) as i32, y))?;
+            // East section
+            canvas.draw_line(((center_x + intersection_half_size) as i32, y), (WINDOW_WIDTH as i32, y))?;
         }
 
-        // Center dividers with improved rendering
+        // Center dividers
         canvas.set_draw_color(Color::RGB(255, 255, 0));
 
         // Vertical center divider
         let divider_x = center_x as i32;
-        canvas.draw_line((divider_x - 2, 0), (divider_x - 2, (center_y - HALF_ROAD_WIDTH) as i32))?;
-        canvas.draw_line((divider_x + 2, 0), (divider_x + 2, (center_y - HALF_ROAD_WIDTH) as i32))?;
-        canvas.draw_line((divider_x - 2, (center_y + HALF_ROAD_WIDTH) as i32), (divider_x - 2, WINDOW_HEIGHT as i32))?;
-        canvas.draw_line((divider_x + 2, (center_y + HALF_ROAD_WIDTH) as i32), (divider_x + 2, WINDOW_HEIGHT as i32))?;
+        canvas.draw_line((divider_x, 0), (divider_x, (center_y - intersection_half_size) as i32))?;
+        canvas.draw_line((divider_x, (center_y + intersection_half_size) as i32), (divider_x, WINDOW_HEIGHT as i32))?;
 
         // Horizontal center divider
         let divider_y = center_y as i32;
-        canvas.draw_line((0, divider_y - 2), ((center_x - HALF_ROAD_WIDTH) as i32, divider_y - 2))?;
-        canvas.draw_line((0, divider_y + 2), ((center_x - HALF_ROAD_WIDTH) as i32, divider_y + 2))?;
-        canvas.draw_line(((center_x + HALF_ROAD_WIDTH) as i32, divider_y - 2), (WINDOW_WIDTH as i32, divider_y - 2))?;
-        canvas.draw_line(((center_x + HALF_ROAD_WIDTH) as i32, divider_y + 2), (WINDOW_WIDTH as i32, divider_y + 2))?;
+        canvas.draw_line((0, divider_y), ((center_x - intersection_half_size) as i32, divider_y))?;
+        canvas.draw_line(((center_x + intersection_half_size) as i32, divider_y), (WINDOW_WIDTH as i32, divider_y))?;
 
         Ok(())
-    }
-
-    fn draw_line_segment_with_gap(&self, canvas: &mut Canvas<Window>, start: Vec2, end: Vec2, gap_rect: Rect) -> Result<(), String> {
-        // Check if line intersects with gap rectangle
-        if self.line_intersects_rect(start, end, gap_rect) {
-            // Split line into segments before and after the gap
-            if let Some((before_end, after_start)) = self.calculate_line_gap_points(start, end, gap_rect) {
-                // Draw segment before gap
-                if (before_end - start).length() > 5.0 {
-                    canvas.draw_line(
-                        (start.x as i32, start.y as i32),
-                        (before_end.x as i32, before_end.y as i32),
-                    )?;
-                }
-
-                // Draw segment after gap
-                if (end - after_start).length() > 5.0 {
-                    canvas.draw_line(
-                        (after_start.x as i32, after_start.y as i32),
-                        (end.x as i32, end.y as i32),
-                    )?;
-                }
-            }
-        } else {
-            // Draw complete line if no intersection
-            canvas.draw_line(
-                (start.x as i32, start.y as i32),
-                (end.x as i32, end.y as i32),
-            )?;
-        }
-        Ok(())
-    }
-
-    fn line_intersects_rect(&self, start: Vec2, end: Vec2, rect: Rect) -> bool {
-        // Simple AABB vs line intersection test
-        let min_x = start.x.min(end.x);
-        let max_x = start.x.max(end.x);
-        let min_y = start.y.min(end.y);
-        let max_y = start.y.max(end.y);
-
-        let rect_x = rect.x() as f32;
-        let rect_y = rect.y() as f32;
-        let rect_w = rect.width() as f32;
-        let rect_h = rect.height() as f32;
-
-        !(max_x < rect_x || min_x > rect_x + rect_w ||
-            max_y < rect_y || min_y > rect_y + rect_h)
-    }
-
-    fn calculate_line_gap_points(&self, start: Vec2, end: Vec2, rect: Rect) -> Option<(Vec2, Vec2)> {
-        let rect_x = rect.x() as f32;
-        let rect_y = rect.y() as f32;
-        let rect_w = rect.width() as f32;
-        let rect_h = rect.height() as f32;
-
-        // Simple calculation - find intersection points with rectangle edges
-        let direction = (end - start).normalize();
-        let is_vertical = direction.x.abs() < 0.1;
-
-        if is_vertical {
-            // Vertical line - intersect with top/bottom edges
-            let before_end = Vec2::new(start.x, rect_y - 5.0);
-            let after_start = Vec2::new(start.x, rect_y + rect_h + 5.0);
-            Some((before_end, after_start))
-        } else {
-            // Horizontal line - intersect with left/right edges
-            let before_end = Vec2::new(rect_x - 5.0, start.y);
-            let after_start = Vec2::new(rect_x + rect_w + 5.0, start.y);
-            Some((before_end, after_start))
-        }
     }
 
     fn draw_lane_indicators(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
-        let indicator_size = 10u32;
-        let offset = 150.0;
+        let indicator_size = 8u32;
+        let offset = 120.0;
 
-        // North-bound lanes (right side)
+        // North-bound lanes
         for lane in 0..3 {
             let x = get_lane_center_x(Direction::North, lane);
             let color = match lane {
@@ -693,7 +566,7 @@ impl GameState {
             canvas.fill_rect(Rect::new((x - indicator_size as f32 / 2.0) as i32, (center_y + offset) as i32, indicator_size, indicator_size))?;
         }
 
-        // South-bound lanes (left side)
+        // South-bound lanes
         for lane in 0..3 {
             let x = get_lane_center_x(Direction::South, lane);
             let color = match lane {
@@ -706,7 +579,7 @@ impl GameState {
             canvas.fill_rect(Rect::new((x - indicator_size as f32 / 2.0) as i32, (center_y - offset - indicator_size as f32) as i32, indicator_size, indicator_size))?;
         }
 
-        // East-bound lanes (bottom side)
+        // East-bound lanes
         for lane in 0..3 {
             let y = get_lane_center_y(Direction::East, lane);
             let color = match lane {
@@ -719,7 +592,7 @@ impl GameState {
             canvas.fill_rect(Rect::new((center_x - offset - indicator_size as f32) as i32, (y - indicator_size as f32 / 2.0) as i32, indicator_size, indicator_size))?;
         }
 
-        // West-bound lanes (top side)
+        // West-bound lanes
         for lane in 0..3 {
             let y = get_lane_center_y(Direction::West, lane);
             let color = match lane {
@@ -739,6 +612,7 @@ impl GameState {
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
 
+        // Intersection area
         canvas.set_draw_color(Color::RGB(45, 45, 45));
         canvas.fill_rect(Rect::new(
             (center_x - HALF_ROAD_WIDTH) as i32,
@@ -747,6 +621,7 @@ impl GameState {
             TOTAL_ROAD_WIDTH as u32,
         ))?;
 
+        // Intersection border
         canvas.set_draw_color(Color::RGB(255, 255, 0));
         canvas.draw_rect(Rect::new(
             (center_x - HALF_ROAD_WIDTH) as i32,
@@ -758,7 +633,7 @@ impl GameState {
         Ok(())
     }
 
-    fn draw_vehicle_smooth(&self, canvas: &mut Canvas<Window>, vehicle: &Vehicle) -> Result<(), String> {
+    fn draw_vehicle_simple(&self, canvas: &mut Canvas<Window>, vehicle: &Vehicle) -> Result<(), String> {
         let color = match vehicle.color {
             VehicleColor::Red => Color::RGB(255, 80, 80),
             VehicleColor::Blue => Color::RGB(80, 80, 255),
@@ -768,12 +643,10 @@ impl GameState {
 
         canvas.set_draw_color(color);
 
-        let size = 16;
-
-        // Convert floating-point position to integer for SDL2 rendering
+        let size = 14;
         let dest_rect = Rect::new(
-            (vehicle.interpolated_position.x - size as f32 / 2.0) as i32,
-            (vehicle.interpolated_position.y - size as f32 / 2.0) as i32,
+            (vehicle.position.x - size as f32 / 2.0) as i32,
+            (vehicle.position.y - size as f32 / 2.0) as i32,
             size as u32,
             size as u32,
         );
@@ -784,53 +657,36 @@ impl GameState {
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.draw_rect(dest_rect)?;
 
-        // Smooth direction arrow
+        // Simple direction arrow
         canvas.set_draw_color(Color::RGB(255, 255, 255));
-        self.draw_smooth_direction_arrow(canvas, vehicle)?;
+        self.draw_simple_direction_arrow(canvas, vehicle)?;
 
         Ok(())
     }
 
-    fn draw_smooth_direction_arrow(&self, canvas: &mut Canvas<Window>, vehicle: &Vehicle) -> Result<(), String> {
-        let x = vehicle.interpolated_position.x;
-        let y = vehicle.interpolated_position.y;
-        let angle_rad = vehicle.interpolated_angle.to_radians();
+    fn draw_simple_direction_arrow(&self, canvas: &mut Canvas<Window>, vehicle: &Vehicle) -> Result<(), String> {
+        let x = vehicle.position.x;
+        let y = vehicle.position.y;
 
-        let arrow_length = 6.0;
-        let arrow_end_x = x + angle_rad.cos() * arrow_length;
-        let arrow_end_y = y + angle_rad.sin() * arrow_length;
+        // Simple directional indicator based on current movement direction
+        let current_direction = vehicle.get_current_movement_direction();
 
-        // Draw main arrow line
+        let (dx, dy) = match current_direction {
+            Direction::North => (0.0, -5.0),
+            Direction::South => (0.0, 5.0),
+            Direction::East => (5.0, 0.0),
+            Direction::West => (-5.0, 0.0),
+        };
+
         canvas.draw_line(
             (x as i32, y as i32),
-            (arrow_end_x as i32, arrow_end_y as i32),
-        )?;
-
-        // Draw arrow head
-        let head_angle1 = angle_rad + 2.5;
-        let head_angle2 = angle_rad - 2.5;
-        let head_length = 3.0;
-
-        let head1_x = arrow_end_x + head_angle1.cos() * head_length;
-        let head1_y = arrow_end_y + head_angle1.sin() * head_length;
-        let head2_x = arrow_end_x + head_angle2.cos() * head_length;
-        let head2_y = arrow_end_y + head_angle2.sin() * head_length;
-
-        canvas.draw_line(
-            (arrow_end_x as i32, arrow_end_y as i32),
-            (head1_x as i32, head1_y as i32),
-        )?;
-        canvas.draw_line(
-            (arrow_end_x as i32, arrow_end_y as i32),
-            (head2_x as i32, head2_y as i32),
+            ((x + dx) as i32, (y + dy) as i32),
         )?;
 
         Ok(())
     }
 
     fn draw_debug_overlays(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(255, 255, 0));
-
         for vehicle in &self.vehicles {
             // Draw vehicle path history
             if vehicle.path_history.len() > 1 {
@@ -843,21 +699,24 @@ impl GameState {
                 }
             }
 
-            // Draw turning path if in turning state
-            if vehicle.state == VehicleState::Turning {
-                if let Some(ref turning_path) = vehicle.turning_path {
-                    canvas.set_draw_color(Color::RGB(0, 255, 255));
-                    // Draw Bezier curve points
-                    for i in 0..=20 {
-                        let t = i as f32 / 20.0;
-                        let point = turning_path.cubic_bezier(t);
-                        canvas.fill_rect(Rect::new(
-                            (point.x - 1.0) as i32,
-                            (point.y - 1.0) as i32,
-                            2, 2
-                        ))?;
-                    }
-                }
+            // Draw target position
+            canvas.set_draw_color(Color::RGB(0, 255, 0));
+            canvas.fill_rect(Rect::new(
+                (vehicle.target_lane_x - 2.0) as i32,
+                (vehicle.target_lane_y - 2.0) as i32,
+                4, 4
+            ))?;
+
+            // Draw vehicle ID near vehicle
+            canvas.set_draw_color(Color::RGB(255, 255, 255));
+            // For a simple number display, we can draw small rectangles
+            let id_display = vehicle.id % 10; // Just show last digit
+            for digit in 0..id_display {
+                canvas.fill_rect(Rect::new(
+                    (vehicle.position.x + 10.0 + digit as f32 * 2.0) as i32,
+                    (vehicle.position.y - 10.0) as i32,
+                    1, 1
+                ))?;
             }
         }
 
@@ -867,13 +726,15 @@ impl GameState {
     fn draw_ui(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         // Background
         canvas.set_draw_color(Color::RGBA(0, 0, 0, 180));
-        canvas.fill_rect(Rect::new(10, 10, 300, 120))?;
+        canvas.fill_rect(Rect::new(10, 10, 280, 100))?;
 
         canvas.set_draw_color(Color::RGB(255, 255, 255));
-        canvas.draw_rect(Rect::new(10, 10, 300, 120))?;
+        canvas.draw_rect(Rect::new(10, 10, 280, 100))?;
 
-        // Show vehicle counts by route
+        // Show simple statistics
         let mut y_offset = 25;
+
+        // Show vehicles by route with colored indicators
         for route in [Route::Left, Route::Straight, Route::Right] {
             let vehicles_with_route: Vec<&Vehicle> = self.vehicles.iter()
                 .filter(|v| v.route == route)
@@ -888,21 +749,15 @@ impl GameState {
 
             canvas.set_draw_color(route_color);
             for (i, _) in vehicles_with_route.iter().enumerate() {
-                canvas.fill_rect(Rect::new(15 + (i as i32 * 6), y_offset, 4, 8))?;
+                canvas.fill_rect(Rect::new(15 + (i as i32 * 5), y_offset, 3, 6))?;
             }
-            y_offset += 15;
+            y_offset += 12;
         }
 
-        // Show completed vehicles
+        // Show completion indicator
         canvas.set_draw_color(Color::RGB(0, 255, 0));
-        for i in 0..(self.total_vehicles_passed.min(25)) {
-            canvas.fill_rect(Rect::new(15 + (i as i32 * 6), 100, 4, 6))?;
-        }
-
-        // Debug mode indicator
-        if self.debug_mode {
-            canvas.set_draw_color(Color::RGB(255, 255, 0));
-            canvas.fill_rect(Rect::new(280, 15, 20, 10))?;
+        for i in 0..(self.total_vehicles_passed.min(30)) {
+            canvas.fill_rect(Rect::new(15 + (i as i32 * 4), 80, 2, 4))?;
         }
 
         Ok(())
@@ -912,7 +767,7 @@ impl GameState {
         let elapsed = self.simulation_start_time.elapsed();
 
         println!("\n╔══════════════════════════════════════════════════════════════╗");
-        println!("║   FINAL STATISTICS - SMOOTH ANIMATIONS & PERFECT LANES      ║");
+        println!("║              FINAL STATISTICS - FIXED SYSTEM                ║");
         println!("╠══════════════════════════════════════════════════════════════╣");
         println!("║ Total simulation time: {:>8.1}s                           ║", elapsed.as_secs_f32());
         println!("║ Vehicles spawned: {:>16}                           ║", self.statistics.total_vehicles_spawned);
@@ -931,15 +786,15 @@ impl GameState {
         println!("║ Throughput: {:>16.1} veh/min                  ║", throughput);
         println!("╚══════════════════════════════════════════════════════════════╝");
 
-        println!("\n🎯 ENHANCED SYSTEM RESULTS:");
-        println!("  ✅ Smooth Bezier curve turning animations");
-        println!("  ✅ Fixed timestep physics for consistency");
-        println!("  ✅ Floating-point rendering for smoothness");
-        println!("  ✅ Perfect lane sectioning with intersection boundaries");
-        println!("  ✅ Mathematical precision maintained: {} pixel lanes", LANE_WIDTH);
+        println!("\n🎯 FIXED SYSTEM RESULTS:");
+        println!("  ✅ Simple 90-degree instant turns");
+        println!("  ✅ Perfect lane positioning");
+        println!("  ✅ Fixed rendering bugs");
+        println!("  ✅ Improved collision avoidance");
+        println!("  ✅ Mathematical precision: {} pixel lanes", LANE_WIDTH);
 
         if self.crash_count == 0 {
-            println!("  🎉 NO CRASHES - Perfect collision avoidance with smooth motion!");
+            println!("  🎉 NO CRASHES - Perfect collision avoidance!");
         }
     }
 }
