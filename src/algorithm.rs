@@ -1,8 +1,8 @@
-// src/algorithm.rs - COMPATIBILITY: Verified with new turn system
+// src/algorithm.rs - FINAL FIX: Context-aware collision prevention
 use crate::intersection::Intersection;
-use crate::vehicle::{Vehicle, VehicleState, VelocityLevel, Direction, Route, Vec2};
+use crate::vehicle::{Vehicle, VehicleState, VelocityLevel, Direction, Route};
 use std::collections::{HashMap, VecDeque};
-use std::ops::Sub; // You can add this line...
+use std::ops::Sub;
 
 pub struct SmartIntersection {
     pub close_calls: u32,
@@ -21,18 +21,16 @@ impl SmartIntersection {
             safe_distance_violations: HashMap::new(),
             current_time: 0.0,
             intersection_occupancy: Vec::new(),
-            max_intersection_capacity: 4, // Allow a few cars in the large intersection box
-            critical_distance: 25.0,      // Critical collision distance
-            safe_following_distance: 60.0, // Standard following distance
+            max_intersection_capacity: 4,
+            critical_distance: 25.0,
+            safe_following_distance: 60.0,
         }
     }
 
     pub fn process_vehicles(&mut self, vehicles: &mut VecDeque<Vehicle>, intersection: &Intersection, delta_time: u32) {
         self.current_time += delta_time as f64 / 1000.0;
-
         self.update_intersection_occupancy(vehicles, intersection);
 
-        // This is the main logic loop
         for i in 0..vehicles.len() {
             let mut should_slow = false;
             let mut should_stop = false;
@@ -40,117 +38,84 @@ impl SmartIntersection {
             for j in 0..vehicles.len() {
                 if i == j { continue; }
 
-                // Check for conflicts
-                if self.vehicles_conflict(&vehicles[i], &vehicles[j], intersection) {
-                    // --- FIXED ---
-                    // Using the '-' operator for subtraction instead of .sub()
-                    let distance = (vehicles[i].position - vehicles[j].position).length();
+                let v_i = &vehicles[i];
+                let v_j = &vehicles[j];
 
-                    // Vehicle ahead logic (follower should slow/stop)
-                    if self.is_vehicle_ahead(&vehicles[i], &vehicles[j]) {
+                // CASE 1: Following another car in the same lane.
+                // This logic is simple and does not need to change.
+                if v_i.direction == v_j.direction && v_i.lane == v_j.lane {
+                    if self.is_vehicle_ahead(v_i, v_j) {
+                        let distance = (v_i.position - v_j.position).length();
                         if distance < self.critical_distance { should_stop = true; }
                         else if distance < self.safe_following_distance { should_slow = true; }
                     }
                 }
+                // CASE 2: Paths cross at the intersection.
+                else if intersection_paths_cross(v_i.direction, v_i.route, v_j.direction, v_j.route) {
+                    // --- THIS IS THE NEW CRITICAL LOGIC ---
+                    // A vehicle should only yield if BOTH vehicles are near the point of conflict.
+                    let v_i_is_near = v_i.is_in_intersection(intersection) || v_i.is_approaching_intersection(intersection);
+                    let v_j_is_near = v_j.is_in_intersection(intersection) || v_j.is_approaching_intersection(intersection);
+
+                    if v_i_is_near && v_j_is_near {
+                        // Both cars are in the danger zone. Apply a priority rule to decide who yields.
+                        // Rule: Higher ID vehicle yields. This is deterministic and prevents deadlocks.
+                        if v_i.id > v_j.id {
+                            should_slow = true; // Be cautious when a conflict is developing.
+                            // If they are about to touch, perform an emergency stop.
+                            if (v_i.position - v_j.position).length() < self.critical_distance + 10.0 {
+                                should_stop = true;
+                            }
+                        }
+                    }
+                }
             }
 
-            // Intersection entry management
-            if self.should_wait_for_intersection(&vehicles[i], intersection) {
+            if !should_stop && self.should_wait_for_intersection_capacity(&vehicles[i]) {
                 should_stop = true;
             }
 
-            // Apply velocity changes
             let vehicle = &mut vehicles[i];
-            if should_stop {
-                vehicle.set_target_velocity(VelocityLevel::Stop);
-            } else if should_slow {
-                vehicle.set_target_velocity(VelocityLevel::Slow);
-            } else {
-                // If no hazards, try to resume normal speed
-                if vehicle.is_in_intersection(intersection) {
-                    vehicle.set_target_velocity(VelocityLevel::Slow);
-                } else if vehicle.state == VehicleState::Exiting {
-                    vehicle.set_target_velocity(VelocityLevel::Fast);
-                } else {
-                    vehicle.set_target_velocity(VelocityLevel::Medium);
-                }
+            if should_stop { vehicle.set_target_velocity(VelocityLevel::Stop); }
+            else if should_slow { vehicle.set_target_velocity(VelocityLevel::Slow); }
+            else {
+                if vehicle.is_in_intersection(intersection) { vehicle.set_target_velocity(VelocityLevel::Slow); }
+                else if vehicle.state == VehicleState::Exiting { vehicle.set_target_velocity(VelocityLevel::Fast); }
+                else { vehicle.set_target_velocity(VelocityLevel::Medium); }
             }
         }
-        self.check_for_close_calls(vehicles);
+
+        self.check_for_close_calls_stat(vehicles);
     }
 
     fn update_intersection_occupancy(&mut self, vehicles: &VecDeque<Vehicle>, intersection: &Intersection) {
         self.intersection_occupancy.clear();
         for v in vehicles {
-            if v.is_in_intersection(intersection) {
-                self.intersection_occupancy.push(v.id);
-            }
+            if v.is_in_intersection(intersection) { self.intersection_occupancy.push(v.id); }
         }
     }
 
-    // Main conflict detection logic
-    fn vehicles_conflict(&self, v1: &Vehicle, v2: &Vehicle, intersection: &Intersection) -> bool {
-        // Same lane conflict
-        if v1.direction == v2.direction && v1.lane == v2.lane {
-            return true;
+    fn is_vehicle_ahead(&self, follower: &Vehicle, leader: &Vehicle) -> bool {
+        match follower.direction {
+            Direction::North => leader.position.y < follower.position.y,
+            Direction::South => leader.position.y > follower.position.y,
+            Direction::East => leader.position.x > follower.position.x,
+            Direction::West => leader.position.x < follower.position.x,
         }
-
-        // Both must be near or in intersection to have an intersection conflict
-        if !(v1.is_approaching_intersection(intersection) || v1.is_in_intersection(intersection)) ||
-            !(v2.is_approaching_intersection(intersection) || v2.is_in_intersection(intersection)) {
-            return false;
-        }
-
-        // Broad phase: Do their destination paths cross?
-        return intersection_paths_cross(v1.direction, v1.route, v2.direction, v2.route);
     }
 
-    // Check if v2 is physically ahead of v1 in the same lane
-    fn is_vehicle_ahead(&self, v1: &Vehicle, v2: &Vehicle) -> bool {
-        if v1.direction != v2.direction || v1.lane != v2.lane {
-            return false;
-        }
-
-        let is_ahead = match v1.direction {
-            Direction::North => v2.position.y < v1.position.y,
-            Direction::South => v2.position.y > v1.position.y,
-            Direction::East   => v2.position.x > v1.position.x,
-            Direction::West  => v2.position.x < v1.position.x,
-        };
-        is_ahead
+    fn should_wait_for_intersection_capacity(&self, vehicle: &Vehicle) -> bool {
+        if vehicle.state != VehicleState::Approaching { return false; }
+        if self.intersection_occupancy.len() >= self.max_intersection_capacity { return true; }
+        false
     }
 
-    // Logic to decide if a vehicle should wait before entering the intersection
-    fn should_wait_for_intersection(&self, vehicle: &Vehicle, intersection: &Intersection) -> bool {
-        // Only applies to vehicles approaching, not those already inside
-        if !vehicle.is_approaching_intersection(intersection) {
-            return false;
-        }
-
-        // If intersection is full, wait
-        if self.intersection_occupancy.len() >= self.max_intersection_capacity {
-            return true;
-        }
-
-        // This is a placeholder for more advanced logic where you might check
-        // for conflicts with specific vehicles already in the intersection.
-        // for _id in &self.intersection_occupancy {}
-
-        false // Default to allow entry
-    }
-
-    // Check for close calls for statistical purposes
-    fn check_for_close_calls(&mut self, vehicles: &VecDeque<Vehicle>) {
+    fn check_for_close_calls_stat(&mut self, vehicles: &VecDeque<Vehicle>) {
         let vehicle_list: Vec<_> = vehicles.iter().collect();
         for i in 0..vehicle_list.len() {
             for j in (i + 1)..vehicle_list.len() {
-                let v1 = vehicle_list[i];
-                let v2 = vehicle_list[j];
-
-                // --- FIXED ---
-                // Using the '-' operator for subtraction instead of .sub()
+                let v1 = vehicle_list[i]; let v2 = vehicle_list[j];
                 let distance = (v1.position - v2.position).length();
-
                 if distance < self.critical_distance {
                     let pair = if v1.id < v2.id { (v1.id, v2.id) } else { (v2.id, v1.id) };
                     if !self.safe_distance_violations.contains_key(&pair) {
@@ -161,39 +126,15 @@ impl SmartIntersection {
                 }
             }
         }
-        // Clean up old violations so they can be triggered again after some time
         self.safe_distance_violations.retain(|_, time| self.current_time - *time < 3.0);
     }
 }
 
-// Helper to determine if two paths conflict based on their direction and route.
 fn intersection_paths_cross(d1: Direction, r1: Route, d2: Direction, r2: Route) -> bool {
-    if d1 == d2 { return false; } // Parallel paths don't cross
-
-    // Check for opposite directions (e.g., North vs. South)
-    let is_opposite = (d1 as i32 - d2 as i32).abs() == 2;
-    if is_opposite {
-        // Opposing traffic only conflicts if both are turning left.
-        return r1 == Route::Left && r2 == Route::Left;
-    }
-
-    // Perpendicular traffic rules
-    // Two right-turning vehicles from perpendicular roads do not conflict.
+    if d1 == d2 { return r1 == r2; } // Only conflict if in same lane (handled by same-lane check)
+    let is_opposite = (d1 as i32).abs_diff(d2 as i32) == 2;
+    if is_opposite { return r1 == Route::Left && r2 == Route::Left; }
     if r1 == Route::Right && r2 == Route::Right { return false; }
-
-    // A straight vehicle does not conflict with a vehicle from a perpendicular
-    // road that is turning right (away from the straight path).
-    if r1 == Route::Straight && r2 == Route::Right {
-        // e.g., N-Straight vs W-Right (safe) or E-Right (safe)
-        // Check relative geometry. A simple way is to know they don't cross.
-        return false;
-    }
-    // And the reverse
-    if r2 == Route::Straight && r1 == Route::Right {
-        return false;
-    }
-
-    // In most other perpendicular cases, assume a potential conflict.
-    // e.g., a left turn vs. a straight vehicle.
+    if (r1 == Route::Straight && r2 == Route::Right) || (r2 == Route::Straight && r1 == Route::Right) { return false; }
     true
 }
