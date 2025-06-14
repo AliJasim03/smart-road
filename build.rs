@@ -8,73 +8,10 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/");
 
-    // Get the project directory
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let assets_dir = Path::new(&manifest_dir).join("assets");
-
-    // Create assets directory structure
-    create_asset_directories(&assets_dir);
-    create_sample_assets(&assets_dir);
-
     // Handle SDL2 library linking based on platform
     handle_sdl2_linking();
 
     println!("Build script completed successfully!");
-}
-
-fn create_asset_directories(assets_dir: &Path) {
-    let subdirs = ["fonts", "vehicles", "road", "sounds", "ui"];
-
-    for subdir in subdirs.iter() {
-        let dir_path = assets_dir.join(subdir);
-        if !dir_path.exists() {
-            if let Err(e) = fs::create_dir_all(&dir_path) {
-                println!("cargo:warning=Failed to create directory {:?}: {}", dir_path, e);
-            } else {
-                println!("Created asset directory: {:?}", dir_path);
-            }
-        }
-    }
-}
-
-fn create_sample_assets(assets_dir: &Path) {
-    // Create placeholder files for assets that the renderer expects
-    let assets_to_create: [(&str, &str); 6] = [
-        ("vehicles/cars.png", "PNG_PLACEHOLDER_FOR_CARS"),
-        ("road/road_right.png", "PNG_PLACEHOLDER_FOR_ROAD_RIGHT"),
-        ("road/road_up.png", "PNG_PLACEHOLDER_FOR_ROAD_UP"),
-        ("road/acera.png", "PNG_PLACEHOLDER_FOR_SIDEWALK"),
-        ("fonts/font.ttf", "TTF_PLACEHOLDER_FONT"),
-        ("README.txt", "Smart Road Simulation Assets\n\nThis directory contains placeholder assets.\nThe renderer will generate fallback graphics if these files are not valid.\n"),
-    ];
-
-    for (relative_path, content) in assets_to_create.iter() {
-        let file_path = assets_dir.join(relative_path);
-
-        if !file_path.exists() {
-            // Create parent directory if it doesn't exist
-            if let Some(parent) = file_path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    println!("cargo:warning=Failed to create parent directory for {:?}: {}", file_path, e);
-                    continue;
-                }
-            }
-
-            // Write placeholder content
-            match fs::File::create(&file_path) {
-                Ok(mut file) => {
-                    if let Err(e) = file.write_all(content.as_bytes()) {
-                        println!("cargo:warning=Failed to write to {:?}: {}", file_path, e);
-                    } else {
-                        println!("Created placeholder asset: {:?}", file_path);
-                    }
-                }
-                Err(e) => {
-                    println!("cargo:warning=Failed to create file {:?}: {}", file_path, e);
-                }
-            }
-        }
-    }
 }
 
 fn handle_sdl2_linking() {

@@ -1,9 +1,8 @@
-// src/main.rs - HYBRID RENDERING: Asset for Surface, Code for Lines
+// src/main.rs - FINAL, CLEANED: Tiled assets for background and road surface
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
-use sdl2::rect::{Rect, Point};
-// Restored asset-loading modules
+use sdl2::rect::{Rect};
 use sdl2::render::{Canvas, Texture, TextureCreator};
 use sdl2::image::{self, InitFlag, LoadTexture};
 use sdl2::video::{Window, WindowContext};
@@ -29,29 +28,26 @@ const LANE_WIDTH: f32 = 30.0;
 const TOTAL_ROAD_WIDTH: f32 = 180.0;
 const HALF_ROAD_WIDTH: f32 = 90.0;
 
+// A constant to control the on-screen size of the background tiles
+const TILE_SIZE: u32 = 128;
+
 fn main() -> Result<(), String> {
-    println!("=== Smart Road - Hybrid Rendering ===");
-    println!("✅ Using asset for road surface and procedural lines.");
+    println!("=== Smart Road - Fully Textured with Tiling ===");
+    println!("✅ Tiling assets for background and road surface.");
 
     let sdl_context = sdl2::init()?;
     let video_subsystem = sdl_context.video()?;
     let _image_context = image::init(InitFlag::PNG)?;
 
     let window = video_subsystem
-        .window("Smart Road - Hybrid System", WINDOW_WIDTH, WINDOW_HEIGHT)
+        .window("Smart Road - Tiled System", WINDOW_WIDTH, WINDOW_HEIGHT)
         .position_centered()
         .build()
         .map_err(|e| e.to_string())?;
 
-    let mut canvas = window
-        .into_canvas()
-        .accelerated()
-        .present_vsync()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut canvas = window.into_canvas().accelerated().present_vsync().build().map_err(|e| e.to_string())?;
 
     let texture_creator = canvas.texture_creator();
-    // Pass the texture creator to GameState upon creation
     let mut game = GameState::new(&texture_creator)?;
     let mut event_pump = sdl_context.event_pump()?;
     let mut running = true;
@@ -69,7 +65,7 @@ fn main() -> Result<(), String> {
 
         for event in event_pump.poll_iter() {
             if let Event::KeyDown { keycode: Some(Keycode::Escape), .. } = event { running = false; }
-            if let Event::Quit {..} = event { running = false; }
+            if let Event::Quit { .. } = event { running = false; }
             game.handle_event(&event);
         }
 
@@ -90,9 +86,6 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-// All helper functions (print, geometry, etc.) are correct and remain unchanged.
-// For brevity, I am not including them again. Paste them here from the previous version.
-// --- SNIP HELPER FUNCTIONS ---
 fn print_controls() {
     println!("=== CONTROLS ===");
     println!("↑ Arrow Up:    Spawn vehicle from South (moving North)");
@@ -153,19 +146,19 @@ fn get_destination_for_route(incoming: Direction, route: Route) -> Direction {
 }
 
 fn get_route_for_lane(lane: usize) -> Route {
-    match lane { 0 => Route::Right, 1 => Route::Straight, 2 => Route::Left, _ => Route::Straight }
+    match lane { 0 => Route::Right, 1 => Route::Straight, 2 => Route::Left, _ => Route::Straight, }
 }
 
 fn get_color_for_route(route: Route) -> VehicleColor {
-    match route { Route::Left => VehicleColor::Red, Route::Straight => VehicleColor::Blue, Route::Right => VehicleColor::Green }
+    match route { Route::Left => VehicleColor::Red, Route::Straight => VehicleColor::Blue, Route::Right => VehicleColor::Green, }
 }
 
 fn get_lane_color_name(lane: usize) -> &'static str {
-    match get_route_for_lane(lane) { Route::Left => "RED (Left)", Route::Straight => "BLUE (Straight)", Route::Right => "GREEN (Right)" }
+    match get_route_for_lane(lane) { Route::Left => "RED (Left)", Route::Straight => "BLUE (Straight)", Route::Right => "GREEN (Right)", }
 }
 
 fn get_route_name(lane: usize) -> &'static str {
-    match get_route_for_lane(lane) { Route::Left => "LEFT", Route::Straight => "STRAIGHT", Route::Right => "RIGHT" }
+    match get_route_for_lane(lane) { Route::Left => "LEFT", Route::Straight => "STRAIGHT", Route::Right => "RIGHT", }
 }
 
 struct GameState<'a> {
@@ -178,14 +171,14 @@ struct GameState<'a> {
     spawn_timer: f32,
     next_vehicle_id: u32,
     debug_mode: bool,
-    // MODIFIED: This is now a tileable asphalt texture.
     asphalt_texture: Texture<'a>,
+    background_texture: Texture<'a>,
 }
 
 impl<'a> GameState<'a> {
-    fn new(texture_creator: &'a TextureCreator<WindowContext>) -> Result<Self, String> {
-        // Assume you have a simple, tileable grey asphalt texture at this path.
+    pub fn new(texture_creator: &'a TextureCreator<WindowContext>) -> Result<Self, String> {
         let asphalt_texture = texture_creator.load_texture("assets/asphalt_tile.png")?;
+        let background_texture = texture_creator.load_texture("../assets/grass_tile.png")?;
 
         Ok(GameState {
             vehicles: VecDeque::new(),
@@ -198,57 +191,106 @@ impl<'a> GameState<'a> {
             next_vehicle_id: 0,
             debug_mode: false,
             asphalt_texture,
+            background_texture,
         })
     }
 
-    fn render(&mut self, canvas: &mut Canvas<Window>) -> Result<(), String> {
-        canvas.set_draw_color(Color::RGB(40, 120, 40)); // Green grass
+    pub fn handle_event(&mut self, event: &Event) {
+        if let Event::KeyDown { keycode: Some(keycode), repeat: false, .. } = event {
+            match keycode {
+                Keycode::Up => self.try_spawn_vehicle(Direction::North),
+                Keycode::Down => self.try_spawn_vehicle(Direction::South),
+                Keycode::Left => self.try_spawn_vehicle(Direction::West),
+                Keycode::Right => self.try_spawn_vehicle(Direction::East),
+                Keycode::R => {
+                    self.continuous_spawn = !self.continuous_spawn;
+                    println!("🤖 Continuous spawn: {}", if self.continuous_spawn { "ON" } else { "OFF" });
+                }
+                Keycode::D => {
+                    self.debug_mode = !self.debug_mode;
+                    println!("🔍 Debug mode: {}", if self.debug_mode { "ON" } else { "OFF" });
+                }
+                Keycode::Space => self.print_current_statistics(),
+                _ => {}
+            }
+        }
+    }
+
+    pub fn update_physics(&mut self, dt: f64) {
+        if self.spawn_cooldown > 0.0 {
+            self.spawn_cooldown -= dt as f32;
+        }
+        if self.continuous_spawn {
+            self.spawn_timer += dt as f32;
+            if self.spawn_timer >= 2.0 {
+                let direction = match rand::random::<u8>() % 4 {
+                    0 => Direction::North,
+                    1 => Direction::South,
+                    2 => Direction::East,
+                    _ => Direction::West,
+                };
+                self.try_spawn_vehicle(direction);
+                self.spawn_timer = 0.0;
+            }
+        }
+        self.algorithm.process_vehicles(&mut self.vehicles, &self.intersection, (dt * 1000.0) as u32);
+        for vehicle in &mut self.vehicles {
+            vehicle.update_physics(dt, &self.intersection);
+        }
+        self.cleanup_completed_vehicles();
+        self.statistics.update(&self.vehicles, self.algorithm.close_calls);
+    }
+
+    pub fn render(&mut self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         canvas.clear();
 
-        // Step 1: Draw the road surface using the tileable asset
+        self.draw_tiled_background(canvas)?;
         self.draw_road_surface(canvas)?;
-
-        // Step 2: Draw the lane markings on top of the texture
         self.draw_lane_markings(canvas)?;
-
-        // Step 3: Draw the intersection details on top of everything
         self.draw_intersection(canvas)?;
 
-        // Step 4: Draw vehicles and overlays
-        for vehicle in &self.vehicles { self.draw_vehicle(canvas, vehicle)?; }
-        if self.debug_mode { self.draw_debug_overlays(canvas)?; }
+        for vehicle in &self.vehicles {
+            self.draw_vehicle(canvas, vehicle)?;
+        }
+        if self.debug_mode {
+            self.draw_debug_overlays(canvas)?;
+        }
 
         canvas.present();
         Ok(())
     }
 
-    // --- NEW AND REORGANIZED DRAWING LOGIC ---
+    fn draw_tiled_background(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
+        let mut y = 0;
+        while y < WINDOW_HEIGHT {
+            let mut x = 0;
+            while x < WINDOW_WIDTH {
+                let dest_rect = Rect::new(x as i32, y as i32, TILE_SIZE, TILE_SIZE);
+                canvas.copy(&self.background_texture, None, Some(dest_rect))?;
+                x += TILE_SIZE;
+            }
+            y += TILE_SIZE;
+        }
+        Ok(())
+    }
 
     fn draw_road_surface(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
-        // This function will TILE the asphalt texture across the road areas.
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
+        let vertical_road = Rect::new((center_x - HALF_ROAD_WIDTH) as i32, 0, TOTAL_ROAD_WIDTH as u32, WINDOW_HEIGHT);
+        let horizontal_road = Rect::new(0, (center_y - HALF_ROAD_WIDTH) as i32, WINDOW_WIDTH, TOTAL_ROAD_WIDTH as u32);
 
-        let vertical_road = Rect::new( (center_x - HALF_ROAD_WIDTH) as i32, 0, TOTAL_ROAD_WIDTH as u32, WINDOW_HEIGHT );
-        let horizontal_road = Rect::new( 0, (center_y - HALF_ROAD_WIDTH) as i32, WINDOW_WIDTH, TOTAL_ROAD_WIDTH as u32 );
-
-        // Temporarily set the canvas's target to the whole screen area
-        // and just draw the texture into the road shapes.
-        // SDL will tile it for us if the dest rect is larger than the texture.
-        canvas.set_draw_color(Color::RGB(60,60,60)); // Fallback color
-        canvas.fill_rect(vertical_road)?;
-        canvas.fill_rect(horizontal_road)?;
-
+        // Tile the asphalt texture over the road areas
         canvas.copy(&self.asphalt_texture, None, vertical_road)?;
         canvas.copy(&self.asphalt_texture, None, horizontal_road)?;
 
         Ok(())
     }
 
-    // Unchanged procedural functions, now called after the surface is drawn.
-    fn draw_lane_markings(&self, canvas: &mut Canvas<Window>,) -> Result<(), String> {
+    fn draw_lane_markings(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
+
         canvas.set_draw_color(Color::RGB(255, 255, 255));
         for i in 1..3 {
             let x_left = (center_x - HALF_ROAD_WIDTH + (i as f32 * LANE_WIDTH)) as i32;
@@ -266,14 +308,17 @@ impl<'a> GameState<'a> {
             self.draw_dashed_line(canvas, (0, y_bottom), ((center_x - HALF_ROAD_WIDTH) as i32, y_bottom))?;
             self.draw_dashed_line(canvas, ((center_x + HALF_ROAD_WIDTH) as i32, y_bottom), (WINDOW_WIDTH as i32, y_bottom))?;
         }
+
         canvas.set_draw_color(Color::RGB(255, 255, 0));
         let half_size_i32 = HALF_ROAD_WIDTH as i32;
         canvas.draw_line((center_x as i32, 0), (center_x as i32, center_y as i32 - half_size_i32))?;
         canvas.draw_line((center_x as i32, center_y as i32 + half_size_i32), (center_x as i32, WINDOW_HEIGHT as i32))?;
         canvas.draw_line((0, center_y as i32), (center_x as i32 - half_size_i32, center_y as i32))?;
         canvas.draw_line((center_x as i32 + half_size_i32, center_y as i32), (WINDOW_WIDTH as i32, center_y as i32))?;
+
         Ok(())
     }
+
     fn draw_dashed_line(&self, canvas: &mut Canvas<Window>, from: (i32, i32), to: (i32, i32)) -> Result<(), String> {
         let (x1, y1) = from;
         let (x2, y2) = to;
@@ -285,6 +330,7 @@ impl<'a> GameState<'a> {
         let total_segment_length = dash_length + gap_length;
         if total_segment_length <= 0.0 { return Ok(()); }
         let num_segments = (distance / total_segment_length).floor();
+        if distance == 0.0 { return Ok(()); }
         let dir_x = dx / distance;
         let dir_y = dy / distance;
         let mut current_pos_x = x1 as f32;
@@ -298,48 +344,14 @@ impl<'a> GameState<'a> {
         }
         Ok(())
     }
+
     fn draw_intersection(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
-        let rect = Rect::new( (center_x - HALF_ROAD_WIDTH) as i32, (center_y - HALF_ROAD_WIDTH) as i32, TOTAL_ROAD_WIDTH as u32, TOTAL_ROAD_WIDTH as u32);
-        // We are drawing this on top of the road surface, so just the border is needed.
+        let rect = Rect::new((center_x - HALF_ROAD_WIDTH) as i32, (center_y - HALF_ROAD_WIDTH) as i32, TOTAL_ROAD_WIDTH as u32, TOTAL_ROAD_WIDTH as u32);
         canvas.set_draw_color(Color::RGB(255, 255, 0));
         canvas.draw_rect(rect)?;
         Ok(())
-    }
-
-    // Unchanged functions like `handle_event`, `update_physics`, `draw_vehicle`, etc. go here.
-    // For brevity, I will paste the rest of the implementation block below.
-    // --- SNIP REST OF IMPL BLOCK ---
-    fn handle_event(&mut self, event: &Event) {
-        if let Event::KeyDown { keycode: Some(keycode), repeat: false, .. } = event {
-            match keycode {
-                Keycode::Up => self.try_spawn_vehicle(Direction::North),
-                Keycode::Down => self.try_spawn_vehicle(Direction::South),
-                Keycode::Left => self.try_spawn_vehicle(Direction::West),
-                Keycode::Right => self.try_spawn_vehicle(Direction::East),
-                Keycode::R => { self.continuous_spawn = !self.continuous_spawn; println!("🤖 Continuous spawn: {}", if self.continuous_spawn { "ON" } else { "OFF" }); },
-                Keycode::D => { self.debug_mode = !self.debug_mode; println!("🔍 Debug mode: {}", if self.debug_mode { "ON" } else { "OFF" }); },
-                Keycode::Space => self.print_current_statistics(),
-                _ => {}
-            }
-        }
-    }
-
-    fn update_physics(&mut self, dt: f64) {
-        if self.spawn_cooldown > 0.0 { self.spawn_cooldown -= dt as f32; }
-        if self.continuous_spawn {
-            self.spawn_timer += dt as f32;
-            if self.spawn_timer >= 2.0 {
-                let direction = match rand::random::<u8>() % 4 { 0 => Direction::North, 1 => Direction::South, 2 => Direction::East, _ => Direction::West };
-                self.try_spawn_vehicle(direction);
-                self.spawn_timer = 0.0;
-            }
-        }
-        self.algorithm.process_vehicles(&mut self.vehicles, &self.intersection, (dt * 1000.0) as u32);
-        for vehicle in &mut self.vehicles { vehicle.update_physics(dt, &self.intersection); }
-        self.cleanup_completed_vehicles();
-        self.statistics.update(&self.vehicles, self.algorithm.close_calls);
     }
 
     fn try_spawn_vehicle(&mut self, direction: Direction) {
@@ -351,11 +363,13 @@ impl<'a> GameState<'a> {
             Direction::East => v.position.x + 100.0,
             Direction::West => (WINDOW_WIDTH as f32 + 100.0) - v.position.x,
         } < min_spawn_distance) { return; }
+
         let lane = rand::random::<usize>() % 3;
         let route = get_route_for_lane(lane);
         let destination = get_destination_for_route(direction, route);
         let color = get_color_for_route(route);
         let vehicle = Vehicle::new(self.next_vehicle_id, direction, destination, lane, route, color);
+
         println!("🚗 Spawned Vehicle {}: {:?} Lane {} ({}) → {:?} (Route: {:?})", vehicle.id, direction, lane, get_route_name(lane), destination, route);
         self.vehicles.push_back(vehicle);
         self.next_vehicle_id += 1;
@@ -383,19 +397,23 @@ impl<'a> GameState<'a> {
 
     fn draw_vehicle(&self, canvas: &mut Canvas<Window>, vehicle: &Vehicle) -> Result<(), String> {
         canvas.set_draw_color(match vehicle.color {
-            VehicleColor::Red => Color::RGB(255, 80, 80), VehicleColor::Blue => Color::RGB(80, 80, 255),
-            VehicleColor::Green => Color::RGB(80, 255, 80), VehicleColor::Yellow => Color::RGB(255, 255, 80),
+            VehicleColor::Red => Color::RGB(255, 80, 80),
+            VehicleColor::Blue => Color::RGB(80, 80, 255),
+            VehicleColor::Green => Color::RGB(80, 255, 80),
+            VehicleColor::Yellow => Color::RGB(255, 255, 80),
         });
-        let dest_rect = Rect::new( (vehicle.position.x - vehicle.width / 2.0) as i32, (vehicle.position.y - vehicle.height / 2.0) as i32, vehicle.width as u32, vehicle.height as u32 );
+        let dest_rect = Rect::new((vehicle.position.x - vehicle.width / 2.0) as i32, (vehicle.position.y - vehicle.height / 2.0) as i32, vehicle.width as u32, vehicle.height as u32);
         canvas.fill_rect(dest_rect)?;
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.draw_rect(dest_rect)?;
         let center = dest_rect.center();
         let (end_x, end_y) = match vehicle.get_current_movement_direction() {
-            Direction::North => (center.x(), center.y() - 8), Direction::South => (center.x(), center.y() + 8),
-            Direction::East => (center.x() + 8, center.y()), Direction::West => (center.x() - 8, center.y()),
+            Direction::North => (center.x(), center.y() - 8),
+            Direction::South => (center.x(), center.y() + 8),
+            Direction::East => (center.x() + 8, center.y()),
+            Direction::West => (center.x() - 8, center.y()),
         };
-        canvas.set_draw_color(Color::RGB(255,255,255));
+        canvas.set_draw_color(Color::RGB(255, 255, 255));
         canvas.draw_line(center, (end_x, end_y))?;
         Ok(())
     }
