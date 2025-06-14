@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sdl2 = "0.35.2"
 rand = "0.8.5"
+tinyfiledialogs = "3.9.0"
+
+# This is the correct, standard way to enable PNG & JPG support.
+sdl2 = { version = "0.36.0", features = ["image"] }
 
 [[bin]]
 name = "smart_road"
