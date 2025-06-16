@@ -1,4 +1,4 @@
-// src/vehicle.rs - UPDATED for larger sprite dimensions
+// src/vehicle.rs
 use crate::intersection::Intersection;
 use std::time::Instant;
 
@@ -6,10 +6,10 @@ use crate::{HALF_ROAD_WIDTH, LANE_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
-    North,
-    South,
-    East,
-    West,
+    North = 0,
+    South = 2,
+    East = 1,
+    West = 3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,18 +51,12 @@ pub struct Vec2 {
 }
 
 impl Vec2 {
-    pub fn new(x: f32, y: f32) -> Self {
-        Vec2 { x, y }
-    }
-    pub fn length(&self) -> f32 {
-        (self.x * self.x + self.y * self.y).sqrt()
-    }
+    pub fn new(x: f32, y: f32) -> Self { Vec2 { x, y } }
+    pub fn length(&self) -> f32 { (self.x * self.x + self.y * self.y).sqrt() }
 }
 impl std::ops::Sub for Vec2 {
     type Output = Self;
-    fn sub(self, other: Self) -> Self {
-        Vec2::new(self.x - other.x, self.y - other.y)
-    }
+    fn sub(self, other: Self) -> Self { Vec2::new(self.x - other.x, self.y - other.y) }
 }
 
 pub struct Vehicle {
@@ -78,26 +72,28 @@ pub struct Vehicle {
     pub current_velocity: f32,
     pub target_velocity: f32,
     pub width: f32,
-    pub height: f32, // These will now be set from the new constants
+    pub height: f32,
     pub start_time: Instant,
     pub time_in_intersection: u32,
     pub turn_point: Vec2,
     pub target_lane_pos: Vec2,
-    has_reserved_intersection: bool,
     current_movement_dir: Direction,
     pub path_history: Vec<Vec2>,
+    // +++ ADDED: New fields for the predictive algorithm +++
+    pub has_passage_grant: bool,
+    pub time_to_intersection: f32,
 }
 
 impl Vehicle {
+    // --- ADJUSTED: Speeds for new algorithm ---
     pub const STOP_VELOCITY: f32 = 0.0;
-    pub const SLOW_VELOCITY: f32 = 35.0;
-    pub const MEDIUM_VELOCITY: f32 = 60.0;
-    pub const FAST_VELOCITY: f32 = 80.0;
+    pub const SLOW_VELOCITY: f32 = 40.0;  // Speed when yielding/approaching without a grant
+    pub const MEDIUM_VELOCITY: f32 = 90.0; // Normal cruising speed
+    pub const FAST_VELOCITY: f32 = 120.0; // Speed when exiting intersection
 
-    // --- KEY CHANGE: Updated dimensions to match sprites ---
-    pub const WIDTH: f32 = 22.0;
-    pub const HEIGHT: f32 = 44.0;
-    // --- END KEY CHANGE ---
+    // --- KEY CHANGE: Updated dimensions for more realistic on-screen size ---
+    pub const WIDTH: f32 = 24.0;
+    pub const HEIGHT: f32 = 39.0; // Keeps aspect ratio of ~1.6
 
     pub fn new(
         id: u32,
@@ -124,44 +120,45 @@ impl Vehicle {
             current_velocity: initial_velocity,
             target_velocity: initial_velocity,
             width: Self::WIDTH,
-            height: Self::HEIGHT, // Set from the new constants
+            height: Self::HEIGHT,
             start_time: Instant::now(),
             time_in_intersection: 0,
             turn_point,
             target_lane_pos: initial_target,
-            has_reserved_intersection: false,
             current_movement_dir: direction,
             path_history: vec![spawn_pos],
+            // +++ ADDED: Initialize new fields +++
+            has_passage_grant: false,
+            time_to_intersection: f32::MAX,
         }
     }
 
     pub fn get_current_movement_direction(&self) -> Direction {
         self.current_movement_dir
     }
+
     pub fn is_in_intersection(&self, intersection: &Intersection) -> bool {
         intersection.is_point_in_core(self.position.x, self.position.y)
     }
+
     pub fn is_approaching_intersection(&self, intersection: &Intersection) -> bool {
         self.state == VehicleState::Approaching
             && intersection.is_point_in_approach_zone(self.position.x, self.position.y)
     }
 
-    // --- Pasting unchanged functions for completeness ---
     fn calculate_spawn_and_target(direction: Direction, lane: usize) -> (Vec2, Vec2) {
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
         let spawn_margin = 100.0;
         let offset_from_road_edge = LANE_WIDTH * (lane as f32 + 0.5);
-        let lane_pos_x = match direction {
-            Direction::North => center_x + HALF_ROAD_WIDTH - offset_from_road_edge,
-            Direction::South => center_x - HALF_ROAD_WIDTH + offset_from_road_edge,
-            _ => 0.0,
+
+        let (lane_pos_x, lane_pos_y) = match direction {
+            Direction::North => (center_x + HALF_ROAD_WIDTH - offset_from_road_edge, 0.0),
+            Direction::South => (center_x - HALF_ROAD_WIDTH + offset_from_road_edge, 0.0),
+            Direction::East => (0.0, center_y + HALF_ROAD_WIDTH - offset_from_road_edge),
+            Direction::West => (0.0, center_y - HALF_ROAD_WIDTH + offset_from_road_edge),
         };
-        let lane_pos_y = match direction {
-            Direction::East => center_y + HALF_ROAD_WIDTH - offset_from_road_edge,
-            Direction::West => center_y - HALF_ROAD_WIDTH + offset_from_road_edge,
-            _ => 0.0,
-        };
+
         match direction {
             Direction::North => (
                 Vec2::new(lane_pos_x, WINDOW_HEIGHT as f32 + spawn_margin),
@@ -181,68 +178,49 @@ impl Vehicle {
             ),
         }
     }
+
     fn calculate_turn_point(direction: Direction, lane: usize, route: Route) -> Vec2 {
-        if route == Route::Straight {
-            return Vec2::new(-1000.0, -1000.0);
-        }
+        if route == Route::Straight { return Vec2::new(-1000.0, -1000.0); }
         let center_x = WINDOW_WIDTH as f32 / 2.0;
         let center_y = WINDOW_HEIGHT as f32 / 2.0;
         let lane_center_offset = HALF_ROAD_WIDTH - LANE_WIDTH * (lane as f32 + 0.5);
+
         match direction {
-            Direction::North => {
-                let x = center_x + lane_center_offset;
-                let y = if route == Route::Right {
-                    center_y + lane_center_offset
-                } else {
-                    center_y - lane_center_offset
-                };
-                Vec2::new(x, y)
-            }
-            Direction::South => {
-                let x = center_x - lane_center_offset;
-                let y = if route == Route::Right {
-                    center_y - lane_center_offset
-                } else {
-                    center_y + lane_center_offset
-                };
-                Vec2::new(x, y)
-            }
-            Direction::East => {
-                let y = center_y + lane_center_offset;
-                let x = if route == Route::Right {
-                    center_x - lane_center_offset
-                } else {
-                    center_x + lane_center_offset
-                };
-                Vec2::new(x, y)
-            }
-            Direction::West => {
-                let y = center_y - lane_center_offset;
-                let x = if route == Route::Right {
-                    center_x + lane_center_offset
-                } else {
-                    center_x - lane_center_offset
-                };
-                Vec2::new(x, y)
-            }
+            Direction::North => Vec2::new(
+                center_x + lane_center_offset,
+                if route == Route::Right { center_y + lane_center_offset } else { center_y - lane_center_offset },
+            ),
+            Direction::South => Vec2::new(
+                center_x - lane_center_offset,
+                if route == Route::Right { center_y - lane_center_offset } else { center_y + lane_center_offset },
+            ),
+            Direction::East => Vec2::new(
+                if route == Route::Right { center_x - lane_center_offset } else { center_x + lane_center_offset },
+                center_y + lane_center_offset,
+            ),
+            Direction::West => Vec2::new(
+                if route == Route::Right { center_x + lane_center_offset } else { center_x - lane_center_offset },
+                center_y - lane_center_offset,
+            ),
         }
     }
+
     pub fn update_physics(&mut self, dt: f64, intersection: &Intersection) {
         if self.is_in_intersection(intersection) && self.state != VehicleState::Completed {
             self.time_in_intersection += (dt * 1000.0) as u32;
         }
+
         let accel = 60.0;
         let decel = 120.0;
         let diff = self.target_velocity - self.current_velocity;
-        if diff > 1.0 {
-            self.current_velocity += accel * dt as f32;
-        } else if diff < -1.0 {
-            self.current_velocity -= decel * dt as f32;
-        } else {
-            self.current_velocity = self.target_velocity;
-        }
+
+        if diff > 1.0 { self.current_velocity += accel * dt as f32; }
+        else if diff < -1.0 { self.current_velocity -= decel * dt as f32; }
+        else { self.current_velocity = self.target_velocity; }
+
         self.current_velocity = self.current_velocity.max(0.0);
         let distance = self.current_velocity * dt as f32;
+
         match self.current_movement_dir {
             Direction::North => self.position.y -= distance,
             Direction::South => self.position.y += distance,
@@ -251,40 +229,34 @@ impl Vehicle {
         }
         self.update_state(intersection);
     }
+
     fn update_state(&mut self, intersection: &Intersection) {
         let distance_to_turn_point = (self.position - self.turn_point).length();
         let is_at_turn_point = distance_to_turn_point < (self.current_velocity * 0.05).max(3.0);
+
         match self.state {
             VehicleState::Approaching => {
-                if self.is_in_intersection(intersection) {
-                    self.state = VehicleState::Entering;
-                }
+                if self.is_in_intersection(intersection) { self.state = VehicleState::Entering; }
             }
             VehicleState::Entering => {
-                if self.route != Route::Straight && is_at_turn_point {
-                    self.state = VehicleState::Turning;
-                } else if self.route == Route::Straight && !self.is_in_intersection(intersection) {
-                    self.state = VehicleState::Exiting;
-                }
+                if self.route != Route::Straight && is_at_turn_point { self.state = VehicleState::Turning; }
+                else if self.route == Route::Straight && !self.is_in_intersection(intersection) { self.state = VehicleState::Exiting; }
             }
             VehicleState::Turning => {
                 self.position = self.turn_point;
                 self.current_movement_dir = self.destination;
-                self.target_lane_pos =
-                    Self::calculate_spawn_and_target(self.destination, self.lane).1;
+                self.target_lane_pos = Self::calculate_spawn_and_target(self.destination, self.lane).1;
                 self.state = VehicleState::Exiting;
             }
             VehicleState::Exiting => {
-                if self.position.x < -150.0
-                    || self.position.x > WINDOW_WIDTH as f32 + 150.0
-                    || self.position.y < -150.0
-                    || self.position.y > WINDOW_HEIGHT as f32 + 150.0
-                {
+                if self.position.x < -150.0 || self.position.x > WINDOW_WIDTH as f32 + 150.0 ||
+                    self.position.y < -150.0 || self.position.y > WINDOW_HEIGHT as f32 + 150.0 {
                     self.state = VehicleState::Completed;
                 }
             }
             _ => {}
         }
+
         if self.state == VehicleState::Exiting {
             match self.current_movement_dir {
                 Direction::North | Direction::South => {
@@ -300,6 +272,7 @@ impl Vehicle {
             }
         }
     }
+
     pub fn set_target_velocity(&mut self, level: VelocityLevel) {
         self.target_velocity = match level {
             VelocityLevel::Stop => Self::STOP_VELOCITY,

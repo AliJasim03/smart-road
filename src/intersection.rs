@@ -1,4 +1,4 @@
-// src/intersection.rs - GEOMETRY: Core logic is robust
+// src/intersection.rs
 use crate::vehicle::{Vehicle};
 
 pub struct Intersection {

@@ -1,4 +1,4 @@
-// src/statistics.rs - With stats display function
+// src/statistics.rs
 use std::collections::VecDeque;
 use std::time::Instant;
 use crate::vehicle::{Vehicle, Direction, Route};
