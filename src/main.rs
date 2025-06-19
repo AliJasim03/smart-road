@@ -9,6 +9,9 @@ use sdl2::video::{Window, WindowContext};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+// +++ ADDED: Import the necessary crate for the statistics window +++
+use tinyfiledialogs;
+
 mod algorithm;
 mod intersection;
 mod statistics;
@@ -502,10 +505,6 @@ impl<'a> GameState<'a> {
             Direction::West => 270.0,
         };
 
-        // --- THIS IS THE FIX ---
-        // The destination rectangle's dimensions should ALWAYS match the
-        // vehicle's upright (un-rotated) physics dimensions. The `angle`
-        // parameter in `copy_ex` will handle the rotation without distortion.
         let sprite_width = vehicle.width as u32;
         let sprite_height = vehicle.height as u32;
 
@@ -604,7 +603,6 @@ impl<'a> GameState<'a> {
                 self.statistics
                     .record_vehicle_completion(v.time_in_intersection);
                 self.algorithm.clear_reservation_for_vehicle(v.id);
-                println!("✅ Vehicle {} completed journey", v.id);
             }
             !completed
         });
@@ -617,7 +615,18 @@ impl<'a> GameState<'a> {
         println!("⚠️  Close calls: {}", self.algorithm.close_calls);
     }
 
+    // --- KEY CHANGE: Use a message box for final statistics ---
     fn show_final_statistics(&self) {
+        // First, print to console as a fallback.
+        println!("\n=============================");
         println!("{}", self.statistics.get_display_string());
+        println!("=============================");
+
+        // Then, show the message box window.
+        tinyfiledialogs::message_box_ok(
+            "Final Statistics",
+            &self.statistics.get_display_string(),
+            tinyfiledialogs::MessageBoxIcon::Info
+        );
     }
 }
