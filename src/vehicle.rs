@@ -1,8 +1,5 @@
-// src/vehicle.rs
 use crate::intersection::Intersection;
-use std::time::Instant;
-
-use crate::{HALF_ROAD_WIDTH, LANE_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::{SpawnType, HALF_ROAD_WIDTH, LANE_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
@@ -11,7 +8,12 @@ pub enum Direction {
     East = 1,
     West = 3,
 }
-
+// +++ ADD THIS IMPLEMENTATION BLOCK +++
+impl Direction {
+    pub fn is_opposite(self, other: Direction) -> bool {
+        (self as i32 - other as i32).abs() == 2
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Route {
     Left,
@@ -41,7 +43,6 @@ pub enum VehicleColor {
     Red,
     Blue,
     Green,
-    Yellow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -73,27 +74,26 @@ pub struct Vehicle {
     pub target_velocity: f32,
     pub width: f32,
     pub height: f32,
-    pub start_time: Instant,
     pub time_in_intersection: u32,
     pub turn_point: Vec2,
     pub target_lane_pos: Vec2,
     current_movement_dir: Direction,
-    pub path_history: Vec<Vec2>,
-    // +++ ADDED: New fields for the predictive algorithm +++
     pub has_passage_grant: bool,
     pub time_to_intersection: f32,
 }
 
 impl Vehicle {
-    // --- ADJUSTED: Speeds for new algorithm ---
     pub const STOP_VELOCITY: f32 = 0.0;
-    pub const SLOW_VELOCITY: f32 = 40.0;  // Speed when yielding/approaching without a grant
-    pub const MEDIUM_VELOCITY: f32 = 90.0; // Normal cruising speed
-    pub const FAST_VELOCITY: f32 = 120.0; // Speed when exiting intersection
+    pub const SLOW_VELOCITY: f32 = 40.0;
+    pub const MEDIUM_VELOCITY: f32 = 90.0;
+    pub const FAST_VELOCITY: f32 = 120.0;
 
-    // --- KEY CHANGE: Updated dimensions for more realistic on-screen size ---
-    pub const WIDTH: f32 = 24.0;
-    pub const HEIGHT: f32 = 39.0; // Keeps aspect ratio of ~1.6
+    // --- MODIFIED: Increased the physics dimensions of the car. ---
+    // This creates a larger "safety bubble" for all calculations and drawing.
+    pub const ACCELERATION: f32 = 60.0;
+
+    pub const WIDTH: f32 = 30.0;
+    pub const HEIGHT: f32 = 48.0;
 
     pub fn new(
         id: u32,
@@ -102,10 +102,15 @@ impl Vehicle {
         lane: usize,
         route: Route,
         color: VehicleColor,
+        spawn_type: SpawnType,
     ) -> Self {
         let (spawn_pos, initial_target) = Self::calculate_spawn_and_target(direction, lane);
         let turn_point = Self::calculate_turn_point(direction, lane, route);
-        let initial_velocity = Self::MEDIUM_VELOCITY;
+
+        let (initial_velocity, initial_target_velocity, initial_velocity_level) = match spawn_type {
+            SpawnType::Manual => (Self::STOP_VELOCITY, Self::STOP_VELOCITY, VelocityLevel::Stop),
+            SpawnType::Automatic => (Self::MEDIUM_VELOCITY, Self::MEDIUM_VELOCITY, VelocityLevel::Medium),
+        };
 
         Vehicle {
             id,
@@ -116,18 +121,15 @@ impl Vehicle {
             route,
             color,
             state: VehicleState::Approaching,
-            velocity_level: VelocityLevel::Medium,
+            velocity_level: initial_velocity_level,
             current_velocity: initial_velocity,
-            target_velocity: initial_velocity,
+            target_velocity: initial_target_velocity,
             width: Self::WIDTH,
             height: Self::HEIGHT,
-            start_time: Instant::now(),
             time_in_intersection: 0,
             turn_point,
             target_lane_pos: initial_target,
             current_movement_dir: direction,
-            path_history: vec![spawn_pos],
-            // +++ ADDED: Initialize new fields +++
             has_passage_grant: false,
             time_to_intersection: f32::MAX,
         }

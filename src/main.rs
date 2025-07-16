@@ -1,4 +1,3 @@
-// src/main.rs
 use sdl2::event::Event;
 use sdl2::image::{self, InitFlag, LoadTexture};
 use sdl2::keyboard::Keycode;
@@ -9,7 +8,6 @@ use sdl2::video::{Window, WindowContext};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-// +++ ADDED: Import the necessary crate for the statistics window +++
 use tinyfiledialogs;
 
 mod algorithm;
@@ -21,6 +19,12 @@ use algorithm::SmartIntersection;
 use intersection::Intersection;
 use statistics::Statistics;
 use vehicle::{Direction, Route, Vehicle, VehicleColor, VehicleState};
+
+#[derive(Clone, Copy)]
+pub enum SpawnType {
+    Manual,
+    Automatic,
+}
 
 pub const WINDOW_WIDTH: u32 = 1024;
 pub const WINDOW_HEIGHT: u32 = 768;
@@ -153,16 +157,7 @@ fn get_lane_center_x(direction: Direction, lane: usize) -> f32 {
     }
 }
 
-fn get_lane_center_y(direction: Direction, lane: usize) -> f32 {
-    let center_y = WINDOW_HEIGHT as f32 / 2.0;
-    match direction {
-        Direction::East => center_y + HALF_ROAD_WIDTH - LANE_WIDTH * (lane as f32 + 0.5),
-        Direction::West => center_y - HALF_ROAD_WIDTH + LANE_WIDTH * (lane as f32 + 0.5),
-        _ => center_y,
-    }
-}
-
-fn get_destination_for_route(incoming: Direction, route: Route) -> Direction {
+pub fn get_destination_for_route(incoming: Direction, route: Route) -> Direction {
     match (incoming, route) {
         (Direction::North, Route::Left) => Direction::West,
         (Direction::North, Route::Straight) => Direction::North,
@@ -263,10 +258,10 @@ impl<'a> GameState<'a> {
         } = event
         {
             match keycode {
-                Keycode::Up => self.try_spawn_vehicle(Direction::North),
-                Keycode::Down => self.try_spawn_vehicle(Direction::South),
-                Keycode::Left => self.try_spawn_vehicle(Direction::West),
-                Keycode::Right => self.try_spawn_vehicle(Direction::East),
+                Keycode::Up => self.try_spawn_vehicle(Direction::North, SpawnType::Manual),
+                Keycode::Down => self.try_spawn_vehicle(Direction::South, SpawnType::Manual),
+                Keycode::Left => self.try_spawn_vehicle(Direction::West, SpawnType::Manual),
+                Keycode::Right => self.try_spawn_vehicle(Direction::East, SpawnType::Manual),
                 Keycode::R => {
                     self.continuous_spawn = !self.continuous_spawn;
                     println!(
@@ -287,6 +282,7 @@ impl<'a> GameState<'a> {
         }
     }
 
+    // --- FINAL LOGIC FLOW ---
     pub fn update_physics(&mut self, dt: f64) {
         if self.spawn_cooldown > 0.0 {
             self.spawn_cooldown -= dt as f32;
@@ -295,26 +291,29 @@ impl<'a> GameState<'a> {
             self.spawn_timer += dt as f32;
             if self.spawn_timer >= 2.0 {
                 let direction = match rand::random::<u8>() % 4 {
-                    0 => Direction::North,
-                    1 => Direction::South,
-                    2 => Direction::East,
-                    _ => Direction::West,
+                    0 => Direction::North, 1 => Direction::South,
+                    2 => Direction::East, _ => Direction::West,
                 };
-                self.try_spawn_vehicle(direction);
+                self.try_spawn_vehicle(direction, SpawnType::Automatic);
                 self.spawn_timer = 0.0;
             }
         }
+
+        // 1. DECIDE: Algorithm determines what each car should do (set target velocity, get grants)
         self.algorithm.process_vehicles(
             &mut self.vehicles,
             &self.intersection,
             (dt * 1000.0) as u32,
         );
+
+        // 2. ACT: Each car's physics are updated based on the decisions made.
         for vehicle in &mut self.vehicles {
             vehicle.update_physics(dt, &self.intersection);
         }
+
+        // 3. CLEAN UP: Remove completed cars and update stats.
         self.cleanup_completed_vehicles();
-        self.statistics
-            .update(&self.vehicles, self.algorithm.close_calls);
+        self.statistics.update(&self.vehicles, self.algorithm.close_calls);
     }
 
     pub fn render(&mut self, canvas: &mut Canvas<Window>) -> Result<(), String> {
@@ -373,101 +372,43 @@ impl<'a> GameState<'a> {
         canvas.set_draw_color(Color::RGB(255, 255, 255));
         for i in 1..3 {
             let x_left = (center_x - HALF_ROAD_WIDTH + (i as f32 * LANE_WIDTH)) as i32;
-            self.draw_dashed_line(
-                canvas,
-                (x_left, 0),
-                (x_left, (center_y - HALF_ROAD_WIDTH) as i32),
-            )?;
-            self.draw_dashed_line(
-                canvas,
-                (x_left, (center_y + HALF_ROAD_WIDTH) as i32),
-                (x_left, WINDOW_HEIGHT as i32),
-            )?;
+            self.draw_dashed_line(canvas, (x_left, 0), (x_left, (center_y - HALF_ROAD_WIDTH) as i32))?;
+            self.draw_dashed_line(canvas, (x_left, (center_y + HALF_ROAD_WIDTH) as i32), (x_left, WINDOW_HEIGHT as i32))?;
             let x_right = (center_x + HALF_ROAD_WIDTH - (i as f32 * LANE_WIDTH)) as i32;
-            self.draw_dashed_line(
-                canvas,
-                (x_right, 0),
-                (x_right, (center_y - HALF_ROAD_WIDTH) as i32),
-            )?;
-            self.draw_dashed_line(
-                canvas,
-                (x_right, (center_y + HALF_ROAD_WIDTH) as i32),
-                (x_right, WINDOW_HEIGHT as i32),
-            )?;
+            self.draw_dashed_line(canvas, (x_right, 0), (x_right, (center_y - HALF_ROAD_WIDTH) as i32))?;
+            self.draw_dashed_line(canvas, (x_right, (center_y + HALF_ROAD_WIDTH) as i32), (x_right, WINDOW_HEIGHT as i32))?;
         }
         for i in 1..3 {
             let y_top = (center_y - HALF_ROAD_WIDTH + (i as f32 * LANE_WIDTH)) as i32;
-            self.draw_dashed_line(
-                canvas,
-                (0, y_top),
-                ((center_x - HALF_ROAD_WIDTH) as i32, y_top),
-            )?;
-            self.draw_dashed_line(
-                canvas,
-                ((center_x + HALF_ROAD_WIDTH) as i32, y_top),
-                (WINDOW_WIDTH as i32, y_top),
-            )?;
+            self.draw_dashed_line(canvas, (0, y_top), ((center_x - HALF_ROAD_WIDTH) as i32, y_top))?;
+            self.draw_dashed_line(canvas, ((center_x + HALF_ROAD_WIDTH) as i32, y_top), (WINDOW_WIDTH as i32, y_top))?;
             let y_bottom = (center_y + HALF_ROAD_WIDTH - (i as f32 * LANE_WIDTH)) as i32;
-            self.draw_dashed_line(
-                canvas,
-                (0, y_bottom),
-                ((center_x - HALF_ROAD_WIDTH) as i32, y_bottom),
-            )?;
-            self.draw_dashed_line(
-                canvas,
-                ((center_x + HALF_ROAD_WIDTH) as i32, y_bottom),
-                (WINDOW_WIDTH as i32, y_bottom),
-            )?;
+            self.draw_dashed_line(canvas, (0, y_bottom), ((center_x - HALF_ROAD_WIDTH) as i32, y_bottom))?;
+            self.draw_dashed_line(canvas, ((center_x + HALF_ROAD_WIDTH) as i32, y_bottom), (WINDOW_WIDTH as i32, y_bottom))?;
         }
         canvas.set_draw_color(Color::RGB(255, 255, 0));
         let half_size_i32 = HALF_ROAD_WIDTH as i32;
-        canvas.draw_line(
-            (center_x as i32, 0),
-            (center_x as i32, center_y as i32 - half_size_i32),
-        )?;
-        canvas.draw_line(
-            (center_x as i32, center_y as i32 + half_size_i32),
-            (center_x as i32, WINDOW_HEIGHT as i32),
-        )?;
-        canvas.draw_line(
-            (0, center_y as i32),
-            (center_x as i32 - half_size_i32, center_y as i32),
-        )?;
-        canvas.draw_line(
-            (center_x as i32 + half_size_i32, center_y as i32),
-            (WINDOW_WIDTH as i32, center_y as i32),
-        )?;
+        canvas.draw_line((center_x as i32, 0), (center_x as i32, center_y as i32 - half_size_i32))?;
+        canvas.draw_line((center_x as i32, center_y as i32 + half_size_i32), (center_x as i32, WINDOW_HEIGHT as i32))?;
+        canvas.draw_line((0, center_y as i32), (center_x as i32 - half_size_i32, center_y as i32))?;
+        canvas.draw_line((center_x as i32 + half_size_i32, center_y as i32), (WINDOW_WIDTH as i32, center_y as i32))?;
         Ok(())
     }
 
-    fn draw_dashed_line(
-        &self,
-        canvas: &mut Canvas<Window>,
-        from: (i32, i32),
-        to: (i32, i32),
-    ) -> Result<(), String> {
-        let (x1, y1) = from;
-        let (x2, y2) = to;
-        let dx = (x2 - x1) as f32;
-        let dy = (y2 - y1) as f32;
+    fn draw_dashed_line(&self, canvas: &mut Canvas<Window>, from: (i32, i32), to: (i32, i32)) -> Result<(), String> {
+        let (x1, y1) = from; let (x2, y2) = to;
+        let dx = (x2 - x1) as f32; let dy = (y2 - y1) as f32;
         let distance = (dx * dx + dy * dy).sqrt();
-        let dash_length = 15.0;
-        let gap_length = 10.0;
+        let dash_length = 15.0; let gap_length = 10.0;
         let total_segment_length = dash_length + gap_length;
         if total_segment_length <= 0.0 { return Ok(()); }
         let num_segments = (distance / total_segment_length).floor();
         if distance == 0.0 { return Ok(()); }
-        let dir_x = dx / distance;
-        let dir_y = dy / distance;
-        let mut current_pos_x = x1 as f32;
-        let mut current_pos_y = y1 as f32;
+        let dir_x = dx / distance; let dir_y = dy / distance;
+        let mut current_pos_x = x1 as f32; let mut current_pos_y = y1 as f32;
         for _ in 0..num_segments as i32 {
-            let end_x = current_pos_x + dir_x * dash_length;
-            let end_y = current_pos_y + dir_y * dash_length;
-            canvas.draw_line(
-                (current_pos_x.round() as i32, current_pos_y.round() as i32),
-                (end_x.round() as i32, end_y.round() as i32),
-            )?;
+            let end_x = current_pos_x + dir_x * dash_length; let end_y = current_pos_y + dir_y * dash_length;
+            canvas.draw_line((current_pos_x.round() as i32, current_pos_y.round() as i32), (end_x.round() as i32, end_y.round() as i32))?;
             current_pos_x += dir_x * total_segment_length;
             current_pos_y += dir_y * total_segment_length;
         }
@@ -475,46 +416,22 @@ impl<'a> GameState<'a> {
     }
 
     fn draw_intersection(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
-        let center_x = WINDOW_WIDTH as f32 / 2.0;
-        let center_y = WINDOW_HEIGHT as f32 / 2.0;
-        let rect = Rect::new(
-            (center_x - HALF_ROAD_WIDTH) as i32,
-            (center_y - HALF_ROAD_WIDTH) as i32,
-            TOTAL_ROAD_WIDTH as u32,
-            TOTAL_ROAD_WIDTH as u32,
-        );
-        canvas.set_draw_color(Color::RGB(50, 50, 50));
-        canvas.fill_rect(rect)?;
-        canvas.set_draw_color(Color::RGB(255, 255, 0));
-        canvas.draw_rect(rect)?;
+        let center_x = WINDOW_WIDTH as f32 / 2.0; let center_y = WINDOW_HEIGHT as f32 / 2.0;
+        let rect = Rect::new((center_x - HALF_ROAD_WIDTH) as i32, (center_y - HALF_ROAD_WIDTH) as i32, TOTAL_ROAD_WIDTH as u32, TOTAL_ROAD_WIDTH as u32);
+        canvas.set_draw_color(Color::RGB(50, 50, 50)); canvas.fill_rect(rect)?;
+        canvas.set_draw_color(Color::RGB(255, 255, 0)); canvas.draw_rect(rect)?;
         Ok(())
     }
 
     fn draw_vehicle(&self, canvas: &mut Canvas<Window>, vehicle: &Vehicle) -> Result<(), String> {
         let texture = match vehicle.color {
-            VehicleColor::Red => &self.car_red_texture,
-            VehicleColor::Green => &self.car_green_texture,
-            VehicleColor::Blue => &self.car_blue_texture,
-            VehicleColor::Yellow => &self.car_blue_texture,
+            VehicleColor::Red => &self.car_red_texture, VehicleColor::Green => &self.car_green_texture, VehicleColor::Blue => &self.car_blue_texture,
         };
-
         let angle = match vehicle.get_current_movement_direction() {
-            Direction::North => 0.0,
-            Direction::South => 180.0,
-            Direction::East => 90.0,
-            Direction::West => 270.0,
+            Direction::North => 0.0, Direction::South => 180.0, Direction::East => 90.0, Direction::West => 270.0,
         };
-
-        let sprite_width = vehicle.width as u32;
-        let sprite_height = vehicle.height as u32;
-
-        let dest_rect = Rect::new(
-            (vehicle.position.x - (sprite_width as f32 / 2.0)) as i32,
-            (vehicle.position.y - (sprite_height as f32 / 2.0)) as i32,
-            sprite_width,
-            sprite_height,
-        );
-
+        let sprite_width = vehicle.width as u32; let sprite_height = vehicle.height as u32;
+        let dest_rect = Rect::new((vehicle.position.x - (sprite_width as f32 / 2.0)) as i32, (vehicle.position.y - (sprite_height as f32 / 2.0)) as i32, sprite_width, sprite_height);
         canvas.copy_ex(texture, None, Some(dest_rect), angle, None, false, false)?;
         Ok(())
     }
@@ -522,74 +439,42 @@ impl<'a> GameState<'a> {
     fn draw_debug_overlays(&self, canvas: &mut Canvas<Window>) -> Result<(), String> {
         let ttf_context = sdl2::ttf::init().map_err(|e| e.to_string())?;
         let font = ttf_context.load_font("assets/OpenSans-Regular.ttf", 16)?;
-
         for vehicle in &self.vehicles {
             canvas.set_draw_color(Color::RGB(255, 0, 255));
             let (tx, ty) = (vehicle.turn_point.x as i32, vehicle.turn_point.y as i32);
             canvas.draw_rect(Rect::new(tx - 3, ty - 3, 6, 6))?;
-
             canvas.set_draw_color(Color::RGB(0, 255, 255));
-            let (lx, ly) = (
-                vehicle.target_lane_pos.x as i32,
-                vehicle.target_lane_pos.y as i32,
-            );
+            let (lx, ly) = (vehicle.target_lane_pos.x as i32, vehicle.target_lane_pos.y as i32);
             canvas.draw_rect(Rect::new(lx - 3, ly - 3, 6, 6))?;
-
-            let surface = font.render(&format!("{:.1}s", vehicle.time_to_intersection))
-                .blended(if vehicle.has_passage_grant {Color::GREEN} else {Color::YELLOW})
-                .map_err(|e| e.to_string())?;
-
+            let surface = font.render(&format!("{:.1}s", vehicle.time_to_intersection)).blended(if vehicle.has_passage_grant {Color::GREEN} else {Color::YELLOW}).map_err(|e| e.to_string())?;
             let texture_creator = canvas.texture_creator();
             let texture = texture_creator.create_texture_from_surface(&surface).map_err(|e| e.to_string())?;
-
             let sdl2::render::TextureQuery { width, height, .. } = texture.query();
-
             let text_pos = Rect::new(vehicle.position.x as i32 - 10, vehicle.position.y as i32 - 25, width, height);
             canvas.copy(&texture, None, text_pos)?;
         }
         Ok(())
     }
 
-    fn try_spawn_vehicle(&mut self, direction: Direction) {
+    fn try_spawn_vehicle(&mut self, direction: Direction, spawn_type: SpawnType) {
         if self.spawn_cooldown > 0.0 { return; }
-
         let min_spawn_distance = 150.0;
         if self.vehicles.iter().any(|v| {
             if v.direction == direction {
                 let distance = match v.direction {
-                    Direction::North => (WINDOW_HEIGHT as f32 - v.position.y).abs(),
-                    Direction::South => v.position.y.abs(),
-                    Direction::East => v.position.x.abs(),
-                    Direction::West => (WINDOW_WIDTH as f32 - v.position.x).abs(),
+                    Direction::North => (WINDOW_HEIGHT as f32 - v.position.y).abs(), Direction::South => v.position.y.abs(),
+                    Direction::East => v.position.x.abs(), Direction::West => (WINDOW_WIDTH as f32 - v.position.x).abs(),
                 };
                 return distance < min_spawn_distance;
             }
             false
-        }) {
-            return;
-        }
-
+        }) { return; }
         let lane = rand::random::<usize>() % 3;
         let route = get_route_for_lane(lane);
         let destination = get_destination_for_route(direction, route);
         let color = get_color_for_route(route);
-        let vehicle = Vehicle::new(
-            self.next_vehicle_id,
-            direction,
-            destination,
-            lane,
-            route,
-            color,
-        );
-        println!(
-            "🚗 Spawned Vehicle {}: {:?} Lane {} ({}) → {:?} (Route: {:?})",
-            vehicle.id,
-            direction,
-            lane,
-            get_route_name(lane),
-            destination,
-            route
-        );
+        let vehicle = Vehicle::new(self.next_vehicle_id, direction, destination, lane, route, color, spawn_type);
+        println!("🚗 Spawned Vehicle {}: {:?} Lane {} ({}) → {:?} (Route: {:?})", vehicle.id, direction, lane, get_route_name(lane), destination, route);
         self.vehicles.push_back(vehicle);
         self.next_vehicle_id += 1;
         self.spawn_cooldown = 0.2;
@@ -600,8 +485,7 @@ impl<'a> GameState<'a> {
         self.vehicles.retain(|v| {
             let completed = v.state == VehicleState::Completed;
             if completed {
-                self.statistics
-                    .record_vehicle_completion(v.time_in_intersection);
+                self.statistics.record_vehicle_completion(v.time_in_intersection);
                 self.algorithm.clear_reservation_for_vehicle(v.id);
             }
             !completed
@@ -615,18 +499,10 @@ impl<'a> GameState<'a> {
         println!("⚠️  Close calls: {}", self.algorithm.close_calls);
     }
 
-    // --- KEY CHANGE: Use a message box for final statistics ---
     fn show_final_statistics(&self) {
-        // First, print to console as a fallback.
         println!("\n=============================");
         println!("{}", self.statistics.get_display_string());
         println!("=============================");
-
-        // Then, show the message box window.
-        tinyfiledialogs::message_box_ok(
-            "Final Statistics",
-            &self.statistics.get_display_string(),
-            tinyfiledialogs::MessageBoxIcon::Info
-        );
+        tinyfiledialogs::message_box_ok("Final Statistics", &self.statistics.get_display_string(), tinyfiledialogs::MessageBoxIcon::Info);
     }
 }

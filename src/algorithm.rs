@@ -1,15 +1,19 @@
-// src/algorithm.rs
 use crate::intersection::Intersection;
 use crate::vehicle::{Direction, Route, Vec2, Vehicle, VehicleState, VelocityLevel};
 use std::collections::{HashMap, VecDeque};
 
-// Represents a vehicle's claim to cross the intersection at a certain time.
-#[derive(Debug)]
+// A simplified struct to hold a vehicle's intent, used for grant prioritization.
+struct GrantCandidate {
+    vehicle_index: usize,
+    tti: f64, // Time to intersection
+}
+
+#[derive(Debug, Clone)]
 struct IntersectionReservation {
     vehicle_id: u32,
-    path_key: (Direction, Route), // The path this reservation is for.
-    entry_time: f64,              // The simulation time the vehicle expects to enter.
-    clear_time: f64,              // The time the path is expected to be clear.
+    path_key: (Direction, Route),
+    entry_time: f64,
+    clear_time: f64,
 }
 
 pub struct SmartIntersection {
@@ -17,10 +21,8 @@ pub struct SmartIntersection {
     safe_distance_violations: HashMap<(u32, u32), f64>,
     current_time: f64,
     reservations: Vec<IntersectionReservation>,
-
-    // These constants are for the BUMPER-TO-BUMPER following logic.
     critical_gap: f32,
-    safe_following_gap: f32,
+    reservation_safety_gap: f64,
 }
 
 impl SmartIntersection {
@@ -30,130 +32,167 @@ impl SmartIntersection {
             safe_distance_violations: HashMap::new(),
             current_time: 0.0,
             reservations: Vec::new(),
-            // --- These are for same-lane following and are likely fine ---
-            critical_gap: 5.0,        // A 5px emergency gap
-            safe_following_gap: 40.0, // Aim for a gap of one car length
+            critical_gap: 15.0,
+            reservation_safety_gap: 0.6,
         }
     }
 
-    // --- Bumper helpers remain the same ---
+    fn get_time_to_travel(&self, v_initial: f32, v_target: f32, acceleration: f32, distance: f32) -> f64 {
+        if v_initial >= v_target || acceleration <= 0.0 {
+            return if v_initial > 0.0 { (distance / v_initial) as f64 } else { f64::MAX };
+        }
+        let time_to_accel = (v_target - v_initial) / acceleration;
+        let dist_covered_during_accel = (v_initial * time_to_accel) + 0.5 * acceleration * time_to_accel.powi(2);
+        if dist_covered_during_accel >= distance {
+            let a = 0.5 * acceleration; let b = v_initial; let c = -distance;
+            let discriminant = b.powi(2) - 4.0 * a * c;
+            if discriminant >= 0.0 {
+                return ((-b + discriminant.sqrt()) / (2.0 * a)) as f64;
+            } else {
+                return f64::MAX;
+            }
+        } else {
+            let remaining_dist = distance - dist_covered_during_accel;
+            let time_at_const_speed = remaining_dist / v_target;
+            return time_to_accel as f64 + time_at_const_speed as f64;
+        }
+    }
+
     fn get_front_bumper_pos(&self, vehicle: &Vehicle) -> Vec2 {
-        let offset = vehicle.height / 2.0;
-        let mut pos = vehicle.position;
+        let offset = vehicle.height / 2.0; let mut pos = vehicle.position;
         match vehicle.get_current_movement_direction() {
-            Direction::North => pos.y -= offset,
-            Direction::South => pos.y += offset,
-            Direction::East  => pos.x += offset,
-            Direction::West  => pos.x -= offset,
+            Direction::North => pos.y -= offset, Direction::South => pos.y += offset,
+            Direction::East => pos.x += offset, Direction::West => pos.x -= offset,
         }
         pos
     }
 
     fn get_rear_bumper_pos(&self, vehicle: &Vehicle) -> Vec2 {
-        let offset = vehicle.height / 2.0;
-        let mut pos = vehicle.position;
+        let offset = vehicle.height / 2.0; let mut pos = vehicle.position;
         match vehicle.get_current_movement_direction() {
-            Direction::North => pos.y += offset,
-            Direction::South => pos.y -= offset,
-            Direction::East  => pos.x -= offset,
-            Direction::West  => pos.x += offset,
+            Direction::North => pos.y += offset, Direction::South => pos.y -= offset,
+            Direction::East => pos.x -= offset, Direction::West => pos.x += offset,
         }
         pos
     }
 
+    // --- FINAL LOGIC: Decide, then let main loop act ---
     pub fn process_vehicles(
         &mut self,
         vehicles: &mut VecDeque<Vehicle>,
         intersection: &Intersection,
         delta_time: u32,
     ) {
-        self.current_time += delta_time as f64 / 1000.0;
+        let dt_seconds = delta_time as f64 / 1000.0;
+        self.current_time += dt_seconds;
         self.clear_stale_reservations();
 
-        for i in 0..vehicles.len() {
-            let mut desired_velocity = self.get_leading_vehicle_decision(i, vehicles);
-            if desired_velocity == VelocityLevel::Medium {
-                let v = &vehicles[i];
-                if v.has_passage_grant {
-                    desired_velocity = if v.state == VehicleState::Exiting { VelocityLevel::Fast } else { VelocityLevel::Medium };
-                } else if v.is_approaching_intersection(intersection) {
-                    desired_velocity = VelocityLevel::Slow;
+        let mut candidates = Vec::new();
+
+        // 1. Find candidates for grants based on who needs one.
+        for (i, v) in vehicles.iter().enumerate() {
+            if !v.has_passage_grant && v.state == VehicleState::Approaching {
+                let dist = distance_to_core(self.get_front_bumper_pos(v), v.direction, intersection);
+                if dist > 0.0 {
+                    let tti = self.get_time_to_travel(v.current_velocity, Vehicle::MEDIUM_VELOCITY, Vehicle::ACCELERATION, dist);
+                    if tti.is_finite() {
+                        candidates.push(GrantCandidate { vehicle_index: i, tti });
+                    }
                 }
             }
-            vehicles[i].set_target_velocity(desired_velocity);
         }
 
-        for v in vehicles.iter_mut() {
-            if !v.has_passage_grant && v.state == VehicleState::Approaching {
-                self.try_grant_passage(v, intersection);
+        // 2. Prioritize candidates by sorting by Time To Intersection.
+        candidates.sort_by(|a, b| a.tti.partial_cmp(&b.tti).unwrap_or(std::cmp::Ordering::Equal));
+
+        // 3. Attempt to grant passage to the prioritized candidates.
+        for candidate in &candidates {
+            self.try_grant_passage(
+                &mut vehicles[candidate.vehicle_index],
+                candidate.tti,
+            );
+        }
+
+        // 4. Set the final target velocity for every car for this frame.
+        // The main loop will call update_physics to actually use this value.
+        for i in 0..vehicles.len() {
+            let final_vel = self.get_final_velocity_decision(i, &vehicles, intersection);
+            vehicles[i].set_target_velocity(final_vel);
+            // Also update TTI for debug view
+            for cand in &candidates {
+                if cand.vehicle_index == i {
+                    vehicles[i].time_to_intersection = cand.tti as f32;
+                }
             }
         }
+
         self.check_for_close_calls_stat(vehicles);
     }
 
-    fn get_leading_vehicle_decision(&self, i: usize, vehicles: &VecDeque<Vehicle>) -> VelocityLevel {
-        let follower = &vehicles[i];
+    fn get_final_velocity_decision(&self, i: usize, vehicles: &VecDeque<Vehicle>, intersection: &Intersection) -> VelocityLevel {
+        let v = &vehicles[i];
+
+        // Rule 1: A car is too close ahead. Must slow/stop.
         for j in 0..vehicles.len() {
             if i == j { continue; }
             let leader = &vehicles[j];
-            if follower.direction == leader.direction && follower.lane == leader.lane {
-                let is_ahead = match follower.direction {
-                    Direction::North => leader.position.y < follower.position.y,
-                    Direction::South => leader.position.y > follower.position.y,
-                    Direction::East => leader.position.x > follower.position.x,
-                    Direction::West => leader.position.x < follower.position.x,
+            if v.direction == leader.direction && v.lane == leader.lane {
+                let is_ahead = match v.direction {
+                    Direction::North => leader.position.y < v.position.y, Direction::South => leader.position.y > v.position.y,
+                    Direction::East  => leader.position.x > v.position.x, Direction::West  => leader.position.x < v.position.x,
                 };
                 if is_ahead {
-                    let bumper_to_bumper_distance = (self.get_front_bumper_pos(follower) - self.get_rear_bumper_pos(leader)).length();
+                    let bumper_to_bumper_distance = (self.get_front_bumper_pos(v) - self.get_rear_bumper_pos(leader)).length();
                     if bumper_to_bumper_distance < self.critical_gap { return VelocityLevel::Stop; }
-                    if bumper_to_bumper_distance < self.safe_following_gap { return leader.velocity_level; }
+                    if bumper_to_bumper_distance < v.height * 1.5 { return leader.velocity_level; }
                 }
             }
         }
+
+        // Rule 2: Car has a grant. It should proceed.
+        if v.has_passage_grant {
+            return if v.state == VehicleState::Exiting { VelocityLevel::Fast } else { VelocityLevel::Medium };
+        }
+
+        // Rule 3: Car is approaching intersection without a grant. Be cautious.
+        if v.is_approaching_intersection(intersection) {
+            return VelocityLevel::Slow;
+        }
+
+        // Rule 4: Otherwise, no immediate threats. Cruise at medium speed.
         VelocityLevel::Medium
     }
 
-    fn try_grant_passage(&mut self, vehicle: &mut Vehicle, intersection: &Intersection) {
-        let dist_to_intersection = distance_to_core(self.get_front_bumper_pos(vehicle), vehicle.direction, intersection);
-        if vehicle.current_velocity < 1.0 { vehicle.time_to_intersection = f32::MAX; return; }
+    fn try_grant_passage(&mut self, vehicle: &mut Vehicle, tti: f64) {
+        if vehicle.has_passage_grant { return; }
 
-        let tti = dist_to_intersection / vehicle.current_velocity;
-        vehicle.time_to_intersection = tti;
-
-        let time_to_cross_intersection = (intersection.size + vehicle.height) / vehicle.current_velocity;
-
-        let requested_entry_time = self.current_time + tti as f64;
-        let requested_clear_time = requested_entry_time + time_to_cross_intersection as f64;
-
+        let effective_velocity = Vehicle::MEDIUM_VELOCITY;
+        let base_time_to_cross = (Intersection::new().size + vehicle.height) / effective_velocity;
+        let route_travel_time_multiplier = match vehicle.route {
+            Route::Left => 1.8, Route::Straight => 1.1, Route::Right => 0.9,
+        };
+        let time_to_cross_intersection = base_time_to_cross as f64 * route_travel_time_multiplier;
+        let requested_entry_time = self.current_time + tti;
+        let requested_clear_time = requested_entry_time + time_to_cross_intersection + self.reservation_safety_gap;
         let vehicle_path_key = (vehicle.direction, vehicle.route);
 
-        // --- CORE LOGIC FIX: Check for time-window overlaps ---
         for res in &self.reservations {
             if intersection_paths_cross(vehicle_path_key, res.path_key) {
-                // Conflict occurs if the time windows overlap.
-                // Window A [a,b] overlaps with Window B [c,d] if (a < d) and (c < b)
-                let windows_overlap = requested_entry_time < res.clear_time && res.entry_time < requested_clear_time;
-                if windows_overlap {
-                    return; // DENIED: Conflict detected, must wait.
+                if requested_entry_time < res.clear_time && res.entry_time < requested_clear_time {
+                    return;
                 }
             }
         }
-        // --- END OF FIX ---
-
         println!("✅ Vehicle {} GRANTED passage. Crossing from {:.1}s to {:.1}s", vehicle.id, requested_entry_time, requested_clear_time);
         vehicle.has_passage_grant = true;
         self.reservations.push(IntersectionReservation {
-            vehicle_id: vehicle.id,
-            path_key: vehicle_path_key,
-            entry_time: requested_entry_time,
-            clear_time: requested_clear_time,
+            vehicle_id: vehicle.id, path_key: vehicle_path_key,
+            entry_time: requested_entry_time, clear_time: requested_clear_time,
         });
     }
 
     pub fn clear_reservation_for_vehicle(&mut self, vehicle_id: u32) {
-        if self.reservations.iter().any(|r| r.vehicle_id == vehicle_id) {
-            self.reservations.retain(|r| r.vehicle_id != vehicle_id);
-        }
+        self.reservations.retain(|r| r.vehicle_id != vehicle_id);
     }
 
     fn clear_stale_reservations(&mut self) {
@@ -164,18 +203,15 @@ impl SmartIntersection {
         let vehicle_list: Vec<_> = vehicles.iter().collect();
         for i in 0..vehicle_list.len() {
             for j in (i + 1)..vehicle_list.len() {
-                let v1 = vehicle_list[i];
-                let v2 = vehicle_list[j];
-                let center_distance = (v1.position - v2.position).length();
-                if center_distance < (v1.height + v2.height) { // Only check if close
-                    if (self.get_front_bumper_pos(v1) - self.get_rear_bumper_pos(v2)).length() < self.critical_gap ||
-                        (self.get_front_bumper_pos(v2) - self.get_rear_bumper_pos(v1)).length() < self.critical_gap {
-                        let pair = if v1.id < v2.id { (v1.id, v2.id) } else { (v2.id, v1.id) };
-                        if !self.safe_distance_violations.contains_key(&pair) {
-                            self.close_calls += 1;
-                            self.safe_distance_violations.insert(pair, self.current_time);
-                            println!("⚠️ CLOSE CALL #{}: Vehicles {} and {} too close!", self.close_calls, v1.id, v2.id);
-                        }
+                let v1 = vehicle_list[i]; let v2 = vehicle_list[j];
+                let collides_x = (v1.position.x - v2.position.x).abs() * 2.0 < (v1.width + v2.width);
+                let collides_y = (v1.position.y - v2.position.y).abs() * 2.0 < (v1.height + v2.height);
+                if collides_x && collides_y {
+                    let pair = if v1.id < v2.id { (v1.id, v2.id) } else { (v2.id, v1.id) };
+                    if !self.safe_distance_violations.contains_key(&pair) {
+                        self.close_calls += 1;
+                        self.safe_distance_violations.insert(pair, self.current_time);
+                        println!("⚠️ CLOSE CALL #{}: Vehicles {} and {} physically overlap!", self.close_calls, v1.id, v2.id);
                     }
                 }
             }
@@ -194,63 +230,41 @@ fn distance_to_core(pos: Vec2, dir: Direction, intersection: &Intersection) -> f
     }.max(0.0)
 }
 
-// --- CORE LOGIC FIX: A more exhaustive and correct path-crossing logic ---
 fn intersection_paths_cross(path1: (Direction, Route), path2: (Direction, Route)) -> bool {
-    use Direction::*;
-    use Route::*;
+    use Direction::*; use Route::*;
     let (d1, r1) = path1;
     let (d2, r2) = path2;
 
-    if d1 == d2 { return false; } // Same-lane conflicts are handled by following logic
+    if d1 == d2 { return false; }
 
-    // To simplify, we can canonicalize the check by always having d1 be the 'smaller' enum value
-    let (d1, r1, d2, r2) = if d1 as u8 > d2 as u8 {
-        (d2, r2, d1, r1)
-    } else {
-        (d1, r1, d2, r2)
-    };
+    let dest1 = crate::get_destination_for_route(d1, r1);
+    let dest2 = crate::get_destination_for_route(d2, r2);
 
-    match (d1, r1, d2, r2) {
-        // --- North vs East ---
-        (North, Straight, East, Straight) => true,
-        (North, Straight, East, Left)     => true,
-        (North, Left,     East, Straight) => true,
-        (North, Left,     East, Left)     => true,
-        (North, Left,     East, Right)    => true, // Conflict
-        (North, Right,    East, Straight) => true, // Conflict
-        // Other (North, _, East, _) pairs do not conflict.
-
-        // --- North vs West ---
-        (North, Straight, West, Straight) => true,
-        (North, Straight, West, Left)     => true,
-        (North, Right,    West, Straight) => true,
-        (North, Right,    West, Left)     => true,
-        (North, Right,    West, Right)    => true,
-        (North, Left,     West, Right)    => true,
-
-        // --- North vs South (Opposite) ---
-        (North, Left, South, Left) => true, // Head-on left turn conflict
-
-        // --- East vs South ---
-        (East, Straight, South, Straight) => true,
-        (East, Straight, South, Left)     => true,
-        (East, Right,    South, Straight) => true,
-        (East, Right,    South, Left)     => true,
-        (East, Right,    South, Right)    => true,
-        (East, Left,     South, Right)    => true,
-
-        // --- East vs West (Opposite) ---
-        (East, Left, West, Left) => true,
-
-        // --- South vs West ---
-        (South, Straight, West, Straight) => true,
-        (South, Straight, West, Left)     => true,
-        (South, Left,     West, Straight) => true,
-        (South, Left,     West, Left)     => true,
-        (South, Left,     West, Right)    => true,
-        (South, Right,    West, Straight) => true,
-
-        // If we haven't matched a conflicting rule, they don't conflict
-        _ => false,
+    if dest1 == dest2 && !d1.is_opposite(d2) {
+        return true;
     }
+
+    if !d1.is_opposite(d2) {
+        // These are pairs from adjacent directions.
+        match (d1, r1, d2, r2) {
+            // Safe cases (U-turns from one road to another)
+            (North, Left, West, Right) | (West, Right, North, Left) => return false,
+            (North, Right, East, Left) | (East, Left, North, Right) => return false,
+            (South, Left, East, Right) | (East, Right, South, Left) => return false,
+            (South, Right, West, Left) | (West, Left, South, Right) => return false,
+            // All other adjacent path combinations conflict.
+            _ => return true,
+        }
+    }
+
+    // These are pairs from opposite directions (e.g., North/South).
+    if (r1 == Straight && r2 == Straight) ||
+        (r1 == Straight && r2 == Right) ||
+        (r1 == Right && r2 == Straight) ||
+        (r1 == Right && r2 == Right) {
+        return false;
+    }
+
+    // All other opposite path combinations (involving a left turn) conflict.
+    true
 }
