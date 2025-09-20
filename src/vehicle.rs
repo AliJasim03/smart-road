@@ -1,287 +1,398 @@
-use crate::intersection::Intersection;
-use crate::{SpawnType, HALF_ROAD_WIDTH, LANE_WIDTH, WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::constants::*;
+use crate::direction::*;
+use crate::vehicle_positions::Position;
+use crate::vehicle_positions::{get_spawn_position, get_turning_position};
+use rand::Rng;
+use sdl2::pixels::Color;
+use sdl2::rect::Rect;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Direction {
-    North = 0,
-    South = 2,
-    East = 1,
-    West = 3,
-}
-// +++ ADD THIS IMPLEMENTATION BLOCK +++
-impl Direction {
-    pub fn is_opposite(self, other: Direction) -> bool {
-        (self as i32 - other as i32).abs() == 2
-    }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Route {
-    Left,
-    Straight,
-    Right,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimedPosition {
+    pub position: Position,
+    pub time: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum VehicleState {
-    Approaching,
-    Entering,
-    Turning,
-    Exiting,
-    Completed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum VelocityLevel {
-    Stop,
-    Slow,
-    Medium,
-    Fast,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum VehicleColor {
-    Red,
-    Blue,
-    Green,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Vec2 {
-    pub x: f32,
-    pub y: f32,
-}
-
-impl Vec2 {
-    pub fn new(x: f32, y: f32) -> Self { Vec2 { x, y } }
-    pub fn length(&self) -> f32 { (self.x * self.x + self.y * self.y).sqrt() }
-}
-impl std::ops::Sub for Vec2 {
-    type Output = Self;
-    fn sub(self, other: Self) -> Self { Vec2::new(self.x - other.x, self.y - other.y) }
-}
-
+#[derive(Debug, PartialEq)]
 pub struct Vehicle {
-    pub id: u32,
-    pub position: Vec2,
-    pub direction: Direction,
-    pub destination: Direction,
-    pub lane: usize,
-    pub route: Route,
-    pub color: VehicleColor,
-    pub state: VehicleState,
-    pub velocity_level: VelocityLevel,
-    pub current_velocity: f32,
-    pub target_velocity: f32,
-    pub width: f32,
-    pub height: f32,
-    pub time_in_intersection: u32,
-    pub turn_point: Vec2,
-    pub target_lane_pos: Vec2,
-    current_movement_dir: Direction,
-    pub has_passage_grant: bool,
-    pub time_to_intersection: f32,
+    pub id: usize,
+    pub rect: Rect,
+    pub color: Color,
+    initial_position: Direction, // initial position and start direction are oppisite
+    start_direction: Direction,
+    target_direction: Direction,
+    turn_direction: TurnDirection,
+    turn_position: (Option<i32>, Option<i32>),
+    path: Vec<TimedPosition>,
+    pub texture_name: String, //we need those two for images
+    pub texture_index: usize, //cuz we want to have more than one car
+    pub rotation: f64,
 }
 
 impl Vehicle {
-    pub const STOP_VELOCITY: f32 = 0.0;
-    pub const SLOW_VELOCITY: f32 = 40.0;
-    pub const MEDIUM_VELOCITY: f32 = 90.0;
-    pub const FAST_VELOCITY: f32 = 120.0;
-
-    // --- MODIFIED: Increased the physics dimensions of the car. ---
-    // This creates a larger "safety bubble" for all calculations and drawing.
-    pub const ACCELERATION: f32 = 60.0;
-
-    pub const WIDTH: f32 = 30.0;
-    pub const HEIGHT: f32 = 48.0;
-
     pub fn new(
-        id: u32,
-        direction: Direction,
-        destination: Direction,
-        lane: usize,
-        route: Route,
-        color: VehicleColor,
-        spawn_type: SpawnType,
+        initial_position: Direction,
+        target_direction: Direction,
+        size: u32,
+        all_vehicles: &Vec<Vehicle>,
+        id: usize,
     ) -> Self {
-        let (spawn_pos, initial_target) = Self::calculate_spawn_and_target(direction, lane);
-        let turn_point = Self::calculate_turn_point(direction, lane, route);
-
-        let (initial_velocity, initial_target_velocity, initial_velocity_level) = match spawn_type {
-            SpawnType::Manual => (Self::STOP_VELOCITY, Self::STOP_VELOCITY, VelocityLevel::Stop),
-            SpawnType::Automatic => (Self::MEDIUM_VELOCITY, Self::MEDIUM_VELOCITY, VelocityLevel::Medium),
+        let start_position = get_spawn_position(initial_position, target_direction);
+        let color = Self::random_color();
+        let rect = Rect::new(start_position.x, start_position.y, size, size);
+        let turn_direction = Direction::turn_direction(initial_position, target_direction);
+        let start_direction = initial_position.opposite();
+        let turn_position = get_turning_position(initial_position, target_direction);
+        let mut rng = rand::thread_rng();
+        let texture_index = rng.gen_range(0..3);
+        let rotation = match initial_position {
+            Direction::Up => 0.0,
+            Direction::Right => 90.0,
+            Direction::Down => 180.0,
+            Direction::Left => 270.0,
         };
-
-        Vehicle {
+        let mut vehicle = Vehicle {
             id,
-            position: spawn_pos,
-            direction,
-            destination,
-            lane,
-            route,
+            rect,
             color,
-            state: VehicleState::Approaching,
-            velocity_level: initial_velocity_level,
-            current_velocity: initial_velocity,
-            target_velocity: initial_target_velocity,
-            width: Self::WIDTH,
-            height: Self::HEIGHT,
-            time_in_intersection: 0,
-            turn_point,
-            target_lane_pos: initial_target,
-            current_movement_dir: direction,
-            has_passage_grant: false,
-            time_to_intersection: f32::MAX,
-        }
-    }
-
-    pub fn get_current_movement_direction(&self) -> Direction {
-        self.current_movement_dir
-    }
-
-    pub fn is_in_intersection(&self, intersection: &Intersection) -> bool {
-        intersection.is_point_in_core(self.position.x, self.position.y)
-    }
-
-    pub fn is_approaching_intersection(&self, intersection: &Intersection) -> bool {
-        self.state == VehicleState::Approaching
-            && intersection.is_point_in_approach_zone(self.position.x, self.position.y)
-    }
-
-    fn calculate_spawn_and_target(direction: Direction, lane: usize) -> (Vec2, Vec2) {
-        let center_x = WINDOW_WIDTH as f32 / 2.0;
-        let center_y = WINDOW_HEIGHT as f32 / 2.0;
-        let spawn_margin = 100.0;
-        let offset_from_road_edge = LANE_WIDTH * (lane as f32 + 0.5);
-
-        let (lane_pos_x, lane_pos_y) = match direction {
-            Direction::North => (center_x + HALF_ROAD_WIDTH - offset_from_road_edge, 0.0),
-            Direction::South => (center_x - HALF_ROAD_WIDTH + offset_from_road_edge, 0.0),
-            Direction::East => (0.0, center_y + HALF_ROAD_WIDTH - offset_from_road_edge),
-            Direction::West => (0.0, center_y - HALF_ROAD_WIDTH + offset_from_road_edge),
+            initial_position,
+            start_direction,
+            target_direction,
+            turn_direction,
+            turn_position,
+            path: Vec::new(),
+            texture_name: "car".to_string(),
+            rotation,
+            texture_index,
         };
+        vehicle.path = vehicle.calculate_path(&start_position, all_vehicles);
 
-        match direction {
-            Direction::North => (
-                Vec2::new(lane_pos_x, WINDOW_HEIGHT as f32 + spawn_margin),
-                Vec2::new(lane_pos_x, -spawn_margin),
-            ),
-            Direction::South => (
-                Vec2::new(lane_pos_x, -spawn_margin),
-                Vec2::new(lane_pos_x, WINDOW_HEIGHT as f32 + spawn_margin),
-            ),
-            Direction::East => (
-                Vec2::new(-spawn_margin, lane_pos_y),
-                Vec2::new(WINDOW_WIDTH as f32 + spawn_margin, lane_pos_y),
-            ),
-            Direction::West => (
-                Vec2::new(WINDOW_WIDTH as f32 + spawn_margin, lane_pos_y),
-                Vec2::new(-spawn_margin, lane_pos_y),
-            ),
-        }
+        vehicle
     }
 
-    fn calculate_turn_point(direction: Direction, lane: usize, route: Route) -> Vec2 {
-        if route == Route::Straight { return Vec2::new(-1000.0, -1000.0); }
-        let center_x = WINDOW_WIDTH as f32 / 2.0;
-        let center_y = WINDOW_HEIGHT as f32 / 2.0;
-        let lane_center_offset = HALF_ROAD_WIDTH - LANE_WIDTH * (lane as f32 + 0.5);
-
-        match direction {
-            Direction::North => Vec2::new(
-                center_x + lane_center_offset,
-                if route == Route::Right { center_y + lane_center_offset } else { center_y - lane_center_offset },
-            ),
-            Direction::South => Vec2::new(
-                center_x - lane_center_offset,
-                if route == Route::Right { center_y - lane_center_offset } else { center_y + lane_center_offset },
-            ),
-            Direction::East => Vec2::new(
-                if route == Route::Right { center_x - lane_center_offset } else { center_x + lane_center_offset },
-                center_y + lane_center_offset,
-            ),
-            Direction::West => Vec2::new(
-                if route == Route::Right { center_x + lane_center_offset } else { center_x - lane_center_offset },
-                center_y - lane_center_offset,
-            ),
-        }
-    }
-
-    pub fn update_physics(&mut self, dt: f64, intersection: &Intersection) {
-        if self.is_in_intersection(intersection) && self.state != VehicleState::Completed {
-            self.time_in_intersection += (dt * 1000.0) as u32;
-        }
-
-        let accel = 60.0;
-        let decel = 120.0;
-        let diff = self.target_velocity - self.current_velocity;
-
-        if diff > 1.0 { self.current_velocity += accel * dt as f32; }
-        else if diff < -1.0 { self.current_velocity -= decel * dt as f32; }
-        else { self.current_velocity = self.target_velocity; }
-
-        self.current_velocity = self.current_velocity.max(0.0);
-        let distance = self.current_velocity * dt as f32;
-
-        match self.current_movement_dir {
-            Direction::North => self.position.y -= distance,
-            Direction::South => self.position.y += distance,
-            Direction::East => self.position.x += distance,
-            Direction::West => self.position.x -= distance,
-        }
-        self.update_state(intersection);
-    }
-
-    fn update_state(&mut self, intersection: &Intersection) {
-        let distance_to_turn_point = (self.position - self.turn_point).length();
-        let is_at_turn_point = distance_to_turn_point < (self.current_velocity * 0.05).max(3.0);
-
-        match self.state {
-            VehicleState::Approaching => {
-                if self.is_in_intersection(intersection) { self.state = VehicleState::Entering; }
-            }
-            VehicleState::Entering => {
-                if self.route != Route::Straight && is_at_turn_point { self.state = VehicleState::Turning; }
-                else if self.route == Route::Straight && !self.is_in_intersection(intersection) { self.state = VehicleState::Exiting; }
-            }
-            VehicleState::Turning => {
-                self.position = self.turn_point;
-                self.current_movement_dir = self.destination;
-                self.target_lane_pos = Self::calculate_spawn_and_target(self.destination, self.lane).1;
-                self.state = VehicleState::Exiting;
-            }
-            VehicleState::Exiting => {
-                if self.position.x < -150.0 || self.position.x > WINDOW_WIDTH as f32 + 150.0 ||
-                    self.position.y < -150.0 || self.position.y > WINDOW_HEIGHT as f32 + 150.0 {
-                    self.state = VehicleState::Completed;
-                }
-            }
-            _ => {}
-        }
-
-        if self.state == VehicleState::Exiting {
-            match self.current_movement_dir {
-                Direction::North | Direction::South => {
-                    if (self.position.x - self.target_lane_pos.x).abs() > 0.5 {
-                        self.position.x += (self.target_lane_pos.x - self.position.x) * 0.1;
-                    }
-                }
-                Direction::East | Direction::West => {
-                    if (self.position.y - self.target_lane_pos.y).abs() > 0.5 {
-                        self.position.y += (self.target_lane_pos.y - self.position.y) * 0.1;
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn set_target_velocity(&mut self, level: VelocityLevel) {
-        self.target_velocity = match level {
-            VelocityLevel::Stop => Self::STOP_VELOCITY,
-            VelocityLevel::Slow => Self::SLOW_VELOCITY,
-            VelocityLevel::Medium => Self::MEDIUM_VELOCITY,
-            VelocityLevel::Fast => Self::FAST_VELOCITY,
+    // Calculate the path as a vector of positions
+    // Calculate the path as a vector of positions
+    fn calculate_path(
+        &self,
+        start_position: &Position,
+        all_vehicles: &Vec<Vehicle>,
+    ) -> Vec<TimedPosition> {
+        let mut temp_rect = self.rect.clone();
+        let mut time = if all_vehicles.is_empty() || all_vehicles[0].path.is_empty() {
+            1
+        } else {
+            all_vehicles[0].path[0].time
         };
-        self.velocity_level = level;
+        let mut speed = 2;
+        let mut current_direction = self.start_direction;
+        let mut path = Vec::new();
+        // this is the first movement to start
+        let start_position = start_position.move_in_direction(&current_direction, speed);
+        let mut current_position = start_position;
+        temp_rect.set_x(current_position.x);
+        temp_rect.set_y(current_position.y);
+
+        // Generate the path
+        while temp_rect.is_in_bounds(WINDOW_SIZE) {
+            // Update direction at the turn position
+            current_direction.update_direction(
+                &self.target_direction,
+                &current_position,
+                &self.turn_position,
+            );
+
+            current_position = current_position.move_in_direction(&current_direction, speed);
+
+            path.push(TimedPosition {
+                position: current_position,
+                time,
+            });
+
+            temp_rect.set_x(current_position.x);
+            temp_rect.set_y(current_position.y);
+
+            // if the vehicle is out of intersection change the speed to 3
+            if current_position.is_out_of_intersection() && speed != 3 {
+                speed = 3;
+            }
+
+            // This is the ALOGIRITHM
+            // The following is to check for collisions with other vehicles
+            while time <= path[path.len() - 1].time {
+                // current position should be depending on the time IMPORTANT
+                let relevant_vehicles: Vec<&Vehicle> = all_vehicles
+                    .iter()
+                    .filter(|vehicle| {
+                        self.is_relevant_for_collision(vehicle, &current_position, &time)
+                    })
+                    .collect();
+
+                // old iteration was (for vehicle in relevant_vehicles)
+                let mut iter = relevant_vehicles.iter();
+                while let Some(vehicle) = iter.next() {
+                    let collision_time_position = vehicle.path.iter().find(|&&tp| tp.time == time);
+                    if collision_time_position.is_none() {
+                        continue;
+                    }
+                    let tp = collision_time_position.unwrap();
+                    // if tp is not in the intersection and not in the same lane then it is not relevant
+                    let same_lane = self.initial_position == vehicle.initial_position
+                        && self.target_direction == vehicle.target_direction;
+                    if !tp.position.is_in_intersection() && !same_lane {
+                        continue;
+                    }
+                    if !current_position.is_in_intersection() && !same_lane {
+                        continue;
+                    }
+                    let vehicle_rect = Rect::new(
+                        tp.position.x,
+                        tp.position.y,
+                        vehicle.rect.width(),
+                        vehicle.rect.height(),
+                    );
+                    if !vehicle_rect.has_intersection(temp_rect) {
+                        continue;
+                    }
+
+                    // when the length of the path is only one the usual way of resolve collision wont work so just stay in the spawn point
+                    if path.len() == 1 || current_position == path[0].position {
+                        path.push(TimedPosition {
+                            position: current_position,
+                            time: time + 1,
+                        });
+                        time += 1;
+                        continue;
+                    }
+
+                    time = self.resolve_collision(&mut path, &current_position, &vehicle_rect);
+                    // i should clear after the current time
+                    if let Some(pos) = path.iter().position(|tp| tp.time == time) {
+                        path.truncate(pos + 1);
+                    }
+                    iter = relevant_vehicles.iter();
+                    // fix current position IMPORTANT
+                    // here it should never crash
+                    current_position = path.iter().find(|tp| tp.time == time).unwrap().position;
+                    temp_rect.set_x(current_position.x);
+                    temp_rect.set_y(current_position.y);
+                    current_direction = if current_position.is_after_turn(&self.turn_position) {
+                        self.target_direction
+                    } else {
+                        self.start_direction
+                    };
+                }
+                time += 1;
+            }
+        }
+        path
+    }
+
+    // this resolve the collision and returns the time of the first position have changed that is in the intersection so we check it and the positions after it
+    fn resolve_collision(
+        &self,
+        path: &mut Vec<TimedPosition>,
+        current_position: &Position,
+        other_vehicle_rect: &Rect,
+    ) -> u64 {
+        let new_position = self.find_non_colliding_position(path, other_vehicle_rect);
+        let steps = current_position.calculate_steps_to(&new_position);
+        if steps == 0 {
+            panic!("Error: Steps cannot be zero.");
+        }
+        let (mut fix_index, mut reached_steps) = self.find_position(path, steps);
+        let print_fix_index = fix_index;
+        let mut tmp_position = path[fix_index].position;
+        let mut current_direction = if tmp_position.is_after_turn(&self.turn_position) {
+            self.target_direction
+        } else {
+            self.start_direction
+        };
+        let mut collision_time_index = path[path.len() - 1].time; // this will be updated with the time that it is in the intersection so it may have a collision
+
+        if reached_steps != steps {
+            let first_position = path.first().unwrap().position;
+            while reached_steps < steps {
+                path[fix_index].position = first_position;
+                reached_steps += 1;
+                fix_index += 1;
+            }
+        }
+        // here i will update and fix the path from the position till the end of the path
+        while tmp_position != new_position {
+            // this should never be reached
+            if fix_index >= path.len() {
+                panic!("Error: Unable to resolve collision, path fixing failed.");
+            }
+            path[fix_index].position = tmp_position;
+            if tmp_position.is_in_intersection() {
+                collision_time_index = path[fix_index].time;
+            }
+            tmp_position = tmp_position.move_in_direction(&current_direction, 1);
+            current_direction.update_direction(
+                &self.target_direction,
+                &tmp_position,
+                &self.turn_position,
+            );
+
+            fix_index += 1;
+        }
+        if fix_index != path.len() - 1 && tmp_position == new_position {
+            panic!(
+                "Unable to resolve collision. Current position: {:?}, New position: {:?}, Fix index: {}, Reached steps: {}, Steps: {}, Current index: {}",
+                current_position, new_position, print_fix_index, reached_steps, steps, path.len() - 1
+            );
+        }
+
+        path[fix_index].position = tmp_position;
+        if *current_position == new_position {
+            panic!(
+            "Unable to resolve collision. Current position: {:?} is the same as new position: {:?}",
+            current_position, new_position
+            );
+        }
+        collision_time_index
+    }
+
+    // returns the position that will be fixing from
+    // if reached the bigenning and still cant be fixed it will return o and the number of steps that can be fixed
+    fn find_position(&self, path: &Vec<TimedPosition>, steps: u64) -> (usize, u64) {
+        let mut reached_steps: u64 = 0;
+        let mut next_position = path[path.len() - 1].position;
+        for index in (0..path.len() - 1).rev() {
+            let diff_x = (next_position.x - path[index].position.x).abs();
+            let diff_y = (next_position.y - path[index].position.y).abs();
+            let diff = diff_x + diff_y;
+            if diff > 1 {
+                reached_steps += (diff - 1) as u64;
+            }
+            if reached_steps == steps {
+                return (index, reached_steps);
+            } else if reached_steps > steps {
+                panic!(
+                    "Reached steps exceeded the required steps. Current position: {:?}, Next position: {:?}, Steps: {}, Reached steps: {}",
+                    path[index].position, next_position, steps, reached_steps
+                );
+            }
+            next_position = path[index].position;
+        }
+        for index in (0..path.len()).rev() {
+            if path[index].position == path[0].position {
+                return (index, reached_steps);
+            }
+        }
+        (0, reached_steps)
+    }
+
+    fn find_non_colliding_position(
+        &self,
+        path: &Vec<TimedPosition>,
+        other_vehicle_rect: &Rect,
+    ) -> Position {
+        let mut temp_rect = self.rect.clone();
+        for path_index in (0..path.len()).rev() {
+            temp_rect.set_x(path[path_index].position.x);
+            temp_rect.set_y(path[path_index].position.y);
+            if !other_vehicle_rect.has_intersection(temp_rect) {
+                return path[path_index].position;
+            }
+        }
+        if path.is_empty() {
+            // should never come here
+            panic!("Error: Path is empty, cannot find non-colliding position.");
+        } else {
+            path[0].position
+        }
+    }
+
+    // Random color generator
+    fn random_color() -> Color {
+        let mut rng = rand::thread_rng();
+        Color::RGB(
+            rng.gen_range(0..=255),
+            rng.gen_range(0..=255),
+            rng.gen_range(0..=255),
+        )
+    }
+
+    pub fn update_position(&mut self) {
+        if !self.path.is_empty() {
+            let next = self.path.remove(0);
+
+            let dx = next.position.x - self.rect.x();
+            let dy = next.position.y - self.rect.y();
+
+            if dx != 0 || dy != 0 {
+                self.rotation = match (dx.signum(), dy.signum()) {
+                    (1, 0) => 90.0,
+                    (-1, 0) => 270.0,
+                    (0, 1) => 180.0,
+                    (0, -1) => 0.0,
+                    _ => self.rotation,
+                };
+            }
+
+            self.rect.set_x(next.position.x);
+            self.rect.set_y(next.position.y);
+        }
+    }
+
+    pub fn is_in_bounds(&self, window_size: u32) -> bool {
+        self.rect.is_in_bounds(window_size)
+    }
+
+    fn is_relevant_for_collision(
+        &self,
+        other_vehicle: &Vehicle,
+        current_position: &Position,
+        time: &u64,
+    ) -> bool {
+        let same_lane = self.initial_position == other_vehicle.initial_position
+            && self.target_direction == other_vehicle.target_direction;
+        // if self is turning to the right and the other is not on the same lane then it is not relevant
+        if (self.turn_direction == TurnDirection::Right
+            || other_vehicle.turn_direction == TurnDirection::Right)
+            && !same_lane
+        {
+            return false;
+        }
+
+        // if the two vehicles have the same start direction but different end direction then they are not relevant
+        if self.start_direction == other_vehicle.start_direction
+            && self.target_direction != other_vehicle.target_direction
+        {
+            return false;
+        }
+
+        // it self is going straigth and the other vehicle is going also stragit and the start position is the oppisite then it is not relevant
+        if self.turn_direction == TurnDirection::Straight
+            && other_vehicle.turn_direction == TurnDirection::Straight
+            && self.initial_position == other_vehicle.start_direction
+        {
+            return false;
+        }
+
+        // if the vehicle is not in the intersection and the other is not in the same lane then it is not relevant
+        if !same_lane && !current_position.is_in_intersection() {
+            return false;
+        }
+
+        if !other_vehicle.path.iter().any(|tp| tp.time == *time) {
+            return false;
+        }
+
+        true
+    }
+}
+
+pub trait RectExtensions {
+    fn is_in_bounds(&self, window_size: u32) -> bool;
+}
+
+impl RectExtensions for Rect {
+    fn is_in_bounds(&self, window_size: u32) -> bool {
+        let size = self.width() as i32;
+        self.x() > -size
+            && self.x() < window_size as i32
+            && self.y() > -size
+            && self.y() < window_size as i32
     }
 }
