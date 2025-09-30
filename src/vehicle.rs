@@ -26,6 +26,7 @@ pub struct Vehicle {
     pub texture_name: String, //we need those two for images
     pub texture_index: usize, //cuz we want to have more than one car
     pub rotation: f64,
+    velocity_type: i32, // Just for display purposes - doesn't affect actual movement
 }
 
 impl Vehicle {
@@ -50,6 +51,10 @@ impl Vehicle {
             Direction::Down => 180.0,
             Direction::Left => 270.0,
         };
+
+        // Assign a velocity type for display purposes only
+        let velocity_type = rng.gen_range(1..=3);
+
         let mut vehicle = Vehicle {
             id,
             rect,
@@ -63,14 +68,14 @@ impl Vehicle {
             texture_name: "car".to_string(),
             rotation,
             texture_index,
+            velocity_type,
         };
         vehicle.path = vehicle.calculate_path(&start_position, all_vehicles);
 
         vehicle
     }
 
-    // Calculate the path as a vector of positions
-    // Calculate the path as a vector of positions
+    // Calculate the path as a vector of positions - EXACTLY AS ORIGINAL
     fn calculate_path(
         &self,
         start_position: &Position,
@@ -82,7 +87,7 @@ impl Vehicle {
         } else {
             all_vehicles[0].path[0].time
         };
-        let mut speed = 2;
+        let mut speed = 2; // KEEP ORIGINAL SPEED
         let mut current_direction = self.start_direction;
         let mut path = Vec::new();
         // this is the first movement to start
@@ -110,7 +115,7 @@ impl Vehicle {
             temp_rect.set_x(current_position.x);
             temp_rect.set_y(current_position.y);
 
-            // if the vehicle is out of intersection change the speed to 3
+            // if the vehicle is out of intersection change the speed to 3 - EXACTLY AS ORIGINAL
             if current_position.is_out_of_intersection() && speed != 3 {
                 speed = 3;
             }
@@ -245,8 +250,8 @@ impl Vehicle {
         path[fix_index].position = tmp_position;
         if *current_position == new_position {
             panic!(
-            "Unable to resolve collision. Current position: {:?} is the same as new position: {:?}",
-            current_position, new_position
+                "Unable to resolve collision. Current position: {:?} is the same as new position: {:?}",
+                current_position, new_position
             );
         }
         collision_time_index
@@ -337,6 +342,11 @@ impl Vehicle {
 
     pub fn is_in_bounds(&self, window_size: u32) -> bool {
         self.rect.is_in_bounds(window_size)
+    }
+
+    // For statistics - return the "velocity type" as if we had 3 speeds
+    pub fn get_velocity_type(&self) -> f32 {
+        self.velocity_type as f32
     }
 
     fn is_relevant_for_collision(

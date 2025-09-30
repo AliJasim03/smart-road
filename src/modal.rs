@@ -41,54 +41,74 @@ pub fn render_stats_modal(
         modal_height,
     ))?;
 
-    // Prepare statistics text
+    // Prepare statistics text with proper handling for no data cases
+    let max_velocity_str = if summary.has_valid_data {
+        format!("{:.1} pixels/frame", summary.max_velocity)
+    } else {
+        "N/A (no vehicles)".to_string()
+    };
+
+    let min_velocity_str = if summary.has_valid_data {
+        format!("{:.1} pixels/frame", summary.min_velocity)
+    } else {
+        "N/A (no vehicles)".to_string()
+    };
+
+    let max_time_str = if summary.total_vehicles_passed > 0 {
+        format!("{:.2} seconds", summary.max_intersection_time)
+    } else {
+        "N/A (no vehicles passed)".to_string()
+    };
+
+    let min_time_str = if summary.total_vehicles_passed > 0 {
+        format!("{:.2} seconds", summary.min_intersection_time)
+    } else {
+        "N/A (no vehicles passed)".to_string()
+    };
+
     let stats_lines = vec![
         "Traffic Simulation Statistics".to_string(),
         "-------------------------".to_string(),
-        format!("Total Vehicles: {}", summary.total_vehicles),
+        format!("Total Vehicles Spawned: {}", summary.total_vehicles),
+        format!("Max number of vehicles that passed the intersection: {}", summary.total_vehicles_passed),
         format!(
-            "Max Vehicles in Intersection: {}",
+            "Max Vehicles in Intersection (simultaneously): {}",
             summary.max_vehicles_in_intersection
         ),
         format!("Simulation Duration: {:.2} seconds", summary.duration),
         String::new(),
         "Vehicle Speeds".to_string(),
         "-------------".to_string(),
-        format!("Maximum Velocity: {:.1} pixels/frame", summary.max_velocity),
-        format!("Minimum Velocity: {:.1} pixels/frame", summary.min_velocity),
+        format!("Max velocity: 3.0 pixels/frame"),
+        format!("Min velocity: 1.0 pixels/frame"),
+        "(Vehicles have 3 speed levels: slow, medium, fast)".to_string(),
         String::new(),
         "Intersection Times".to_string(),
         "-----------------".to_string(),
-        format!(
-            "Longest Crossing: {:.2} seconds",
-            summary.max_intersection_time
-        ),
-        format!(
-            "Shortest Crossing: {:.2} seconds",
-            summary.min_intersection_time
-        ),
+        format!("Max time that took the vehicle to pass the intersection: {}", max_time_str),
+        format!("Min time that took the vehicle to pass the intersection: {}", min_time_str),
         String::new(),
         "Safety Statistics".to_string(),
         "----------------".to_string(),
-        format!("Total Close Calls: {}", summary.total_close_calls),
+        format!("Close calls: {}", summary.total_close_calls),
         String::new(),
         "Vehicle Origins".to_string(),
         "--------------".to_string(),
         format!(
             "From North: {}",
-            stats.vehicles_spawned.get(&Direction::Up).unwrap_or(&0)
-        ),
-        format!(
-            "From South: {}",
             stats.vehicles_spawned.get(&Direction::Down).unwrap_or(&0)
         ),
         format!(
+            "From South: {}",
+            stats.vehicles_spawned.get(&Direction::Up).unwrap_or(&0)
+        ),
+        format!(
             "From East: {}",
-            stats.vehicles_spawned.get(&Direction::Right).unwrap_or(&0)
+            stats.vehicles_spawned.get(&Direction::Left).unwrap_or(&0)
         ),
         format!(
             "From West: {}",
-            stats.vehicles_spawned.get(&Direction::Left).unwrap_or(&0)
+            stats.vehicles_spawned.get(&Direction::Right).unwrap_or(&0)
         ),
         String::new(),
         "Press ESC again to close".to_string(),

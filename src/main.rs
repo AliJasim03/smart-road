@@ -2,7 +2,6 @@ mod constants;
 mod direction;
 mod modal;
 mod statistics;
-mod trees;
 mod vehicle;
 mod vehicle_manager;
 mod vehicle_positions;
@@ -16,7 +15,6 @@ use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use std::time::Instant;
-use trees::Tree;
 use vehicle_manager::VehicleManager;
 
 pub fn main() -> Result<(), String> {
@@ -101,15 +99,13 @@ pub fn main() -> Result<(), String> {
         }
 
         // Render the scene
-
-        // Render the scene
         // Draw background
         canvas.set_draw_color(Color::RGB(50, 205, 50));
         canvas.clear();
 
         // Draw road bases
         canvas.set_draw_color(Color::RGB(51, 51, 51)); // Dark gray for road surface
-                                                       // Vertical road
+        // Vertical road
         canvas
             .fill_rect(Rect::new(
                 5 * LINE_SPACING,
@@ -146,29 +142,6 @@ pub fn main() -> Result<(), String> {
                 .unwrap();
         }
 
-        let trees = vec![
-            Tree::new(LINE_SPACING, LINE_SPACING, LINE_SPACING),
-            Tree::new(
-                WINDOW_SIZE as i32 - 2 * LINE_SPACING,
-                LINE_SPACING,
-                LINE_SPACING,
-            ),
-            Tree::new(
-                LINE_SPACING,
-                WINDOW_SIZE as i32 - 2 * LINE_SPACING,
-                LINE_SPACING,
-            ),
-            Tree::new(
-                WINDOW_SIZE as i32 - 2 * LINE_SPACING,
-                WINDOW_SIZE as i32 - 2 * LINE_SPACING,
-                LINE_SPACING,
-            ),
-        ];
-
-        // Draw all trees
-        for tree in trees.iter() {
-            tree.draw(&mut canvas);
-        }
         // Update and draw vehicles if stats aren't shown
         if !show_stats {
             vehicle_manager.update_vehicles();

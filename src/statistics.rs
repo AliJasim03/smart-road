@@ -45,6 +45,7 @@ impl VehicleStats {
 pub struct Statistics {
     pub vehicles_spawned: HashMap<Direction, u32>,
     pub total_vehicles: u32,
+    pub total_vehicles_passed: u32,  // NEW: Track vehicles that passed through
     pub simulation_start: Instant,
     pub end_time: Option<f32>,
     pub vehicle_stats: HashMap<usize, VehicleStats>,
@@ -57,6 +58,7 @@ pub struct Statistics {
     pub max_vehicles_in_intersection: u32,
     vehicle_counter: usize,
     close_call_pairs: HashSet<(usize, usize)>,
+    has_valid_velocities: bool,  // NEW: Track if we have valid velocity data
 }
 
 impl Statistics {
@@ -64,6 +66,7 @@ impl Statistics {
         Statistics {
             vehicles_spawned: HashMap::new(),
             total_vehicles: 0,
+            total_vehicles_passed: 0,
             simulation_start: Instant::now(),
             end_time: None,
             vehicle_stats: HashMap::new(),
@@ -76,6 +79,7 @@ impl Statistics {
             max_vehicles_in_intersection: 0,
             vehicle_counter: 0,
             close_call_pairs: HashSet::new(),
+            has_valid_velocities: false,
         }
     }
 
@@ -116,6 +120,7 @@ impl Statistics {
                 stats.update_velocity(velocity);
                 self.max_velocity = self.max_velocity.max(velocity);
                 self.min_velocity = self.min_velocity.min(velocity);
+                self.has_valid_velocities = true;
             }
         }
     }
@@ -123,9 +128,17 @@ impl Statistics {
     pub fn record_vehicle_exit(&mut self, vehicle_id: usize) {
         if let Some(stats) = self.vehicle_stats.get_mut(&vehicle_id) {
             stats.record_exit();
+
+            // Increment vehicles that passed through
+            self.total_vehicles_passed += 1;
+
             if let Some(time) = stats.get_intersection_time() {
                 self.max_intersection_time = self.max_intersection_time.max(time);
-                self.min_intersection_time = self.min_intersection_time.min(time);
+                if self.min_intersection_time == f32::MAX {
+                    self.min_intersection_time = time;
+                } else {
+                    self.min_intersection_time = self.min_intersection_time.min(time);
+                }
             }
 
             // Make sure to update intersection count if vehicle is removed while in intersection
@@ -187,19 +200,38 @@ impl Statistics {
     pub fn get_summary(&self) -> StatisticsSummary {
         StatisticsSummary {
             total_vehicles: self.total_vehicles,
-            max_velocity: self.max_velocity,
-            min_velocity: self.min_velocity,
-            max_intersection_time: self.max_intersection_time,
-            min_intersection_time: self.min_intersection_time,
+            total_vehicles_passed: self.total_vehicles_passed,
+            max_velocity: if self.has_valid_velocities {
+                self.max_velocity
+            } else {
+                0.0
+            },
+            min_velocity: if self.has_valid_velocities {
+                self.min_velocity
+            } else {
+                0.0
+            },
+            max_intersection_time: if self.total_vehicles_passed > 0 {
+                self.max_intersection_time
+            } else {
+                0.0
+            },
+            min_intersection_time: if self.total_vehicles_passed > 0 && self.min_intersection_time != f32::MAX {
+                self.min_intersection_time
+            } else {
+                0.0
+            },
             total_close_calls: self.total_close_calls,
             duration: self.get_duration(),
             max_vehicles_in_intersection: self.max_vehicles_in_intersection,
+            has_valid_data: self.has_valid_velocities && self.total_vehicles_passed > 0,
         }
     }
 }
 
 pub struct StatisticsSummary {
     pub total_vehicles: u32,
+    pub total_vehicles_passed: u32,
     pub max_velocity: f32,
     pub min_velocity: f32,
     pub max_intersection_time: f32,
@@ -207,4 +239,5 @@ pub struct StatisticsSummary {
     pub total_close_calls: u32,
     pub duration: f32,
     pub max_vehicles_in_intersection: u32,
+    pub has_valid_data: bool,
 }

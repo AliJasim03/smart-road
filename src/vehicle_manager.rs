@@ -68,19 +68,20 @@ impl VehicleManager {
         let mut to_remove = Vec::new();
         for (idx, vehicle) in self.vehicles.iter_mut().enumerate() {
             let old_pos = (vehicle.rect.x(), vehicle.rect.y());
-            
+
             vehicle.update_position();
             let new_pos = Position {
                 x: vehicle.rect.x(),
                 y: vehicle.rect.y(),
             };
 
-            // Calculate velocity (pixels per frame)
-
+            // Calculate actual velocity (pixels per frame)
             let dx = (new_pos.x - old_pos.0) as f32;
             let dy = (new_pos.y - old_pos.1) as f32;
             let velocity = (dx * dx + dy * dy).sqrt();
 
+            // Update statistics with the actual movement velocity
+            // Use the actual calculated velocity, not the base speed
             self.statistics
                 .update_vehicle_stats(vehicle.id, new_pos, velocity);
 
