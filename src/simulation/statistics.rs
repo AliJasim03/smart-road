@@ -1,5 +1,5 @@
 use crate::direction::*;
-use crate::vehicle_positions::Position;
+use crate::geometry::position::Position;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -45,7 +45,7 @@ impl VehicleStats {
 pub struct Statistics {
     pub vehicles_spawned: HashMap<Direction, u32>,
     pub total_vehicles: u32,
-    pub total_vehicles_passed: u32,  // NEW: Track vehicles that passed through
+    pub total_vehicles_passed: u32,
     pub simulation_start: Instant,
     pub end_time: Option<f32>,
     pub vehicle_stats: HashMap<usize, VehicleStats>,
@@ -58,7 +58,7 @@ pub struct Statistics {
     pub max_vehicles_in_intersection: u32,
     vehicle_counter: usize,
     close_call_pairs: HashSet<(usize, usize)>,
-    has_valid_velocities: bool,  // NEW: Track if we have valid velocity data
+    has_valid_velocities: bool,
 }
 
 impl Statistics {
@@ -96,26 +96,22 @@ impl Statistics {
 
     pub fn update_vehicle_stats(&mut self, vehicle_id: usize, position: Position, velocity: f32) {
         if let Some(stats) = self.vehicle_stats.get_mut(&vehicle_id) {
-            // Track intersection entry/exit
             let was_in_intersection = stats.in_intersection;
             let now_in_intersection = position.is_in_intersection();
 
             if !was_in_intersection && now_in_intersection {
-                // Vehicle entered intersection
                 self.current_vehicles_in_intersection += 1;
                 self.max_vehicles_in_intersection = self
                     .max_vehicles_in_intersection
                     .max(self.current_vehicles_in_intersection);
                 stats.in_intersection = true;
             } else if was_in_intersection && !now_in_intersection {
-                // Vehicle exited intersection
                 if self.current_vehicles_in_intersection > 0 {
                     self.current_vehicles_in_intersection -= 1;
                 }
                 stats.in_intersection = false;
             }
 
-            // Update velocity stats
             if velocity > 0.0 {
                 stats.update_velocity(velocity);
                 self.max_velocity = self.max_velocity.max(velocity);
@@ -129,7 +125,6 @@ impl Statistics {
         if let Some(stats) = self.vehicle_stats.get_mut(&vehicle_id) {
             stats.record_exit();
 
-            // Increment vehicles that passed through
             self.total_vehicles_passed += 1;
 
             if let Some(time) = stats.get_intersection_time() {
@@ -141,7 +136,6 @@ impl Statistics {
                 }
             }
 
-            // Make sure to update intersection count if vehicle is removed while in intersection
             if stats.in_intersection {
                 if self.current_vehicles_in_intersection > 0 {
                     self.current_vehicles_in_intersection -= 1;
@@ -152,7 +146,6 @@ impl Statistics {
 
     pub fn check_close_calls(&mut self, vehicle_positions: &[(usize, (i32, i32))]) {
         for (i, &(id1, pos1)) in vehicle_positions.iter().enumerate() {
-            // Create position struct to check if in intersection
             let pos = Position {
                 x: pos1.0,
                 y: pos1.1,
@@ -164,7 +157,6 @@ impl Statistics {
                     y: pos2.1,
                 };
 
-                // At least one vehicle should be in intersection for it to be a close call
                 if !pos.is_in_intersection() && !other_pos.is_in_intersection() {
                     continue;
                 }
@@ -174,10 +166,8 @@ impl Statistics {
                 let distance = (dx * dx + dy * dy).sqrt();
 
                 if distance < SAFE_DISTANCE {
-                    // Sort IDs to ensure consistent pair ordering
                     let pair = if id1 < id2 { (id1, id2) } else { (id2, id1) };
 
-                    // Only count each unique pair once
                     if self.close_call_pairs.insert(pair) {
                         self.total_close_calls += 1;
                     }

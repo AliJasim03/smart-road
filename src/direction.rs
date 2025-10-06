@@ -1,6 +1,5 @@
 use rand::Rng;
-
-use crate::vehicle_positions::Position;
+use crate::geometry::Position;
 
 #[derive(Debug, Copy, Clone, PartialEq, Hash, Eq)]
 pub enum Direction {

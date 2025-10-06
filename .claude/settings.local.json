@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo run:*)",
+      "Bash(brew install:*)",
+      "Bash(mkdir:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(tree:*)",
+      "Bash(brew list:*)",
+      "Bash(export:*)",
+      "Bash(chmod:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

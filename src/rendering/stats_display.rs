@@ -1,5 +1,5 @@
 use crate::direction::Direction;
-use crate::statistics::Statistics;
+use crate::simulation::statistics::Statistics;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use sdl2::render::{Canvas, TextureQuery};
@@ -13,14 +13,12 @@ pub fn render_stats_modal(
 ) -> Result<(), String> {
     let summary = stats.get_summary();
 
-    // Draw semi-transparent background
     let (window_width, window_height) = canvas.output_size()?;
     canvas.set_draw_color(Color::RGBA(0, 0, 0, 180));
     canvas.fill_rect(Rect::new(0, 0, window_width, window_height))?;
 
-    // Draw modal box
-    let modal_width = (window_width as f32 * 0.7) as u32; // Increased width for longer stats
-    let modal_height = (window_height as f32 * 0.8) as u32; // Increased height for more stats
+    let modal_width = (window_width as f32 * 0.7) as u32;
+    let modal_height = (window_height as f32 * 0.8) as u32;
     let modal_x = (window_width - modal_width) / 2;
     let modal_y = (window_height - modal_height) / 2;
 
@@ -32,7 +30,6 @@ pub fn render_stats_modal(
         modal_height,
     ))?;
 
-    // Draw border
     canvas.set_draw_color(Color::RGB(200, 200, 200));
     canvas.draw_rect(Rect::new(
         modal_x as i32,
@@ -41,14 +38,13 @@ pub fn render_stats_modal(
         modal_height,
     ))?;
 
-    // Prepare statistics text with proper handling for no data cases
-    let max_velocity_str = if summary.has_valid_data {
+    let _max_velocity_str = if summary.has_valid_data {
         format!("{:.1} pixels/frame", summary.max_velocity)
     } else {
         "N/A (no vehicles)".to_string()
     };
 
-    let min_velocity_str = if summary.has_valid_data {
+    let _min_velocity_str = if summary.has_valid_data {
         format!("{:.1} pixels/frame", summary.min_velocity)
     } else {
         "N/A (no vehicles)".to_string()
@@ -114,10 +110,8 @@ pub fn render_stats_modal(
         "Press ESC again to close".to_string(),
     ];
 
-    // Render text lines
     let mut y_offset = modal_y as i32 + 20;
     for line in stats_lines.iter() {
-        // Skip empty lines for spacing but update y_offset
         if line.is_empty() {
             y_offset += 15;
             continue;
@@ -135,11 +129,10 @@ pub fn render_stats_modal(
 
         let TextureQuery { width, height, .. } = texture.query();
 
-        // Center the text horizontally
         let x = modal_x as i32 + ((modal_width as i32 - width as i32) / 2);
         canvas.copy(&texture, None, Some(Rect::new(x, y_offset, width, height)))?;
 
-        y_offset += height as i32 + 5; // Reduced spacing between lines
+        y_offset += height as i32 + 5;
     }
 
     Ok(())

@@ -1,8 +1,8 @@
 use crate::constants::*;
+use crate::core::Vehicle;
 use crate::direction::Direction;
-use crate::statistics::Statistics;
-use crate::vehicle::Vehicle;
-use crate::vehicle_positions::Position;
+use crate::geometry::position::Position;
+use crate::simulation::statistics::Statistics;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -54,17 +54,14 @@ impl VehicleManager {
     }
 
     pub fn update_vehicles(&mut self) {
-        // Collect positions for close call detection
         let positions: Vec<(usize, (i32, i32))> = self
             .vehicles
             .iter()
             .map(|v| (v.id, (v.rect.x(), v.rect.y())))
             .collect();
 
-        // Check for close calls
         self.statistics.check_close_calls(&positions);
 
-        // Update vehicle positions and collect those that left the intersection
         let mut to_remove = Vec::new();
         for (idx, vehicle) in self.vehicles.iter_mut().enumerate() {
             let old_pos = (vehicle.rect.x(), vehicle.rect.y());
@@ -75,13 +72,10 @@ impl VehicleManager {
                 y: vehicle.rect.y(),
             };
 
-            // Calculate actual velocity (pixels per frame)
             let dx = (new_pos.x - old_pos.0) as f32;
             let dy = (new_pos.y - old_pos.1) as f32;
             let velocity = (dx * dx + dy * dy).sqrt();
 
-            // Update statistics with the actual movement velocity
-            // Use the actual calculated velocity, not the base speed
             self.statistics
                 .update_vehicle_stats(vehicle.id, new_pos, velocity);
 
@@ -91,7 +85,6 @@ impl VehicleManager {
             }
         }
 
-        // Remove vehicles that have left the screen
         for &idx in to_remove.iter().rev() {
             self.vehicles.remove(idx);
         }
